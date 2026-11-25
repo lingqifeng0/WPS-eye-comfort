@@ -1,0 +1,17 @@
+# Rust / Cargo build outputs & local toolchain overrides
+wps-eye-rust/target/
+wps-eye-rust/.cargo/config.toml
+
+# Native debug symbols & intermediate objects
+**/*.pdb
+**/*.obj
+**/*.exp
+**/*.lib
+
+# Python & OS temporary files
+**/__pycache__/
+*.pyc
+.DS_Store
+Thumbs.db
+*.tmp
+*.bak
