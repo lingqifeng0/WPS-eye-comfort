@@ -1,6 +1,6 @@
 [package]
 name = "wps-eye-comfort"
-version = "4.0.0"
+version = "1.0.0"
 edition = "2021"
 description = "Ultra-lightweight pure Rust + Direct2D WPS Eye Comfort controller with native 2025 dark skin and system tray"
 

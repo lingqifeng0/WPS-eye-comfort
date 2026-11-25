@@ -1,5 +1,7 @@
 # WPS 护眼控制器（WPS Eye Comfort）
 
+**首个正式版本 v1.0.0** · [下载 Windows 单文件版](https://github.com/lingqifeng0/WPS-eye-comfort/releases/latest)
+
 轻量级 **纯 Rust + Win32 + Direct2D/DirectWrite** 编写的 Windows WPS Office 原生深色外观与护眼调色工具。  
 零 Python、零 Electron、零 WebView2，单文件开箱即用，支持 **WPS 文字 / 演示（PPT）/ 表格** 三端原生深色皮肤与实时文档页内护眼调色。
 
@@ -16,7 +18,21 @@
 - **开机静默自启（免管理员权限）**：面板底部与托盘右键均支持一键开关，写入当前用户启动项 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`，开机静默驻留托盘并在后续打开 WPS 时自动延续上次开关状态。
 - **严格校验与无损恢复**：启动前对目标 WPS 二进制执行 SHA-256 + RVA 特征校验，绝不修改 WPS 安装文件与文档内容；退出或恢复时忠实还原启用前的原生皮肤、护眼模式与显示选项。
 
-![WPS 原生深色实景效果](docs/preview-wps-dark.png)
+## 实机测试画面
+
+截图环境为 Windows 11 和 WPS Office 12.8.2.19823（32 位）。三个组件均开启了原生深色外观。文字还开启了页面调色，表格单元格和演示幻灯片显示各自样例的原始颜色。
+
+### WPS 文字（Word）
+
+![WPS 文字的原生深色外观和页面调色](docs/preview-wps-dark.png)
+
+### WPS 表格（Excel）
+
+![WPS 表格开启原生深色外观后的编辑窗口](docs/preview-wps-spreadsheets.png)
+
+### WPS 演示（PowerPoint）
+
+![WPS 演示开启原生深色外观后的编辑窗口](docs/preview-wps-presentation.png)
 
 ## 快速使用
 
