@@ -1,36 +1,36 @@
 {
-  "protocol": 4,
-  "wps_version": "12.8.2.19823",
-  "machine": "x86",
-  "agent_sha256": "a153520b5a0c5d49ae1e7552ff6e6bad8b67934f820c087bf3e49fd896f7a406",
-  "common_dlls": [
-    "kshell.dll",
-    "ksolite.dll",
-    "kprometheus.dll",
-    "kso.dll",
-    "Qt5CoreKso.dll",
-    "Qt5GuiKso.dll",
-    "Qt5WidgetsKso.dll"
-  ],
-  "writer_dlls": [
-    "wpsmain.dll"
-  ],
-  "host_exes": [
-    "wps.exe",
-    "wpp.exe",
-    "et.exe"
-  ],
-  "wps_files": {
-    "wps.exe": "738af30adb80e656f700e85c783cccf0c30ae7aaa77a64993152768ac30d414c",
-    "wpp.exe": "7b8c96f28216ecd37b37fe6ba626b219154cbe4249c1d9f741da20f06d29aab9",
-    "et.exe": "df980b4657a473022c28560d3792cae103e806cc7569e5c1b19fb59e0a4969e8",
-    "wpsmain.dll": "52ffb819bbe6e5e7ebd79894fe3a437d03ad478fc1d71644f8f548553ce2c2d2",
-    "kshell.dll": "e83bc2f7081ed65298aaf055f7582f5cfef862f011270628d69e9a78de0169f0",
-    "ksolite.dll": "97b14c414c2434d3577afa17810667b6fe68020f8606c416b866173d51c119cd",
-    "kprometheus.dll": "75a25a9af2fe2a3d1ec3fdae30380e28fdf8b56583dfca1762ac4a03ec9c220b",
-    "kso.dll": "6c6696e287f7e806b74a91109faf828f2e8e023bf3be417fdeefcf69951eb963",
-    "Qt5CoreKso.dll": "c3fcfb2f470f368e7d09f8db4608a634c66f73668808143fd64abba169ea56a0",
-    "Qt5GuiKso.dll": "f560ccf778b4620bb886240fc76621ef0e29be418c6376a8277fb9afe519cdfb",
-    "Qt5WidgetsKso.dll": "11055a43c394c159de6e2759e133c7ddcac046836a701f0de9c9235fbc191133"
-  }
+    "protocol":  4,
+    "wps_version":  "12.8.2.19823",
+    "machine":  "x86",
+    "agent_sha256":  "bb460bfdaf600987f5c9219f70dcd9211816ca8904a442074683f6be8fef41c8",
+    "common_dlls":  [
+                        "kshell.dll",
+                        "ksolite.dll",
+                        "kprometheus.dll",
+                        "kso.dll",
+                        "Qt5CoreKso.dll",
+                        "Qt5GuiKso.dll",
+                        "Qt5WidgetsKso.dll"
+                    ],
+    "writer_dlls":  [
+                        "wpsmain.dll"
+                    ],
+    "host_exes":  [
+                      "wps.exe",
+                      "wpp.exe",
+                      "et.exe"
+                  ],
+    "wps_files":  {
+                      "wps.exe":  "738af30adb80e656f700e85c783cccf0c30ae7aaa77a64993152768ac30d414c",
+                      "wpp.exe":  "7b8c96f28216ecd37b37fe6ba626b219154cbe4249c1d9f741da20f06d29aab9",
+                      "et.exe":  "df980b4657a473022c28560d3792cae103e806cc7569e5c1b19fb59e0a4969e8",
+                      "wpsmain.dll":  "52ffb819bbe6e5e7ebd79894fe3a437d03ad478fc1d71644f8f548553ce2c2d2",
+                      "kshell.dll":  "e83bc2f7081ed65298aaf055f7582f5cfef862f011270628d69e9a78de0169f0",
+                      "ksolite.dll":  "97b14c414c2434d3577afa17810667b6fe68020f8606c416b866173d51c119cd",
+                      "kprometheus.dll":  "75a25a9af2fe2a3d1ec3fdae30380e28fdf8b56583dfca1762ac4a03ec9c220b",
+                      "kso.dll":  "6c6696e287f7e806b74a91109faf828f2e8e023bf3be417fdeefcf69951eb963",
+                      "Qt5CoreKso.dll":  "c3fcfb2f470f368e7d09f8db4608a634c66f73668808143fd64abba169ea56a0",
+                      "Qt5GuiKso.dll":  "f560ccf778b4620bb886240fc76621ef0e29be418c6376a8277fb9afe519cdfb",
+                      "Qt5WidgetsKso.dll":  "11055a43c394c159de6e2759e133c7ddcac046836a701f0de9c9235fbc191133"
+                  }
 }

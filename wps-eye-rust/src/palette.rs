@@ -231,6 +231,44 @@ impl Adjustments {
         // 5) WCAG readability guard
         enforce_min_contrast(bg, fg, a.dark_mode, MIN_CONTRAST_RATIO)
     }
+
+    /// Optical multiply color for Mode 2 (soft-dim without inversion, Word + Excel + PPT)
+    /// and PPT fallback in Mode 1. Pure black text stays pure black (0 * k = 0) and white
+    /// surfaces smoothly dim to a warm/neutral comfort level while keeping >= 4.5:1 vs #000000.
+    pub fn soft_dim_rgb(self) -> Rgb {
+        let a = self.normalized();
+        // Brightness 40..140 -> luminance scale ~0.48..0.94 (default 100 -> 0.72, #B8B8B8)
+        let b_norm = (a.brightness - 40) as f64 / 100.0; // 0.0 .. 1.0
+        let mut lum = 0.48 + 0.46 * b_norm;
+        // Contrast 50..150 gently nudges mid-tone dimming depth (+/- 0.05)
+        let c_shift = (a.contrast - 100) as f64 / 50.0 * 0.05;
+        lum = (lum + c_shift).clamp(0.46, 0.96);
+
+        let mut col = [lum * 255.0; 3];
+        // Warm paper tint (sepia) before grayscale
+        let s_amt = a.sepia as f64 / 100.0;
+        col = apply_sepia(col, s_amt, false, true);
+        // Grayscale pulls warm tint back to pure neutral dim
+        let g_amt = a.grayscale as f64 / 100.0;
+        col = apply_grayscale(col, g_amt);
+
+        // Guarantee fixed #000000 text remains WCAG >= 4.5:1 readable on dimmed white paper
+        let mut rgb = clamp_rgb(col);
+        if contrast_ratio(rgb, (0, 0, 0)) < MIN_CONTRAST_RATIO {
+            for step in 1..=30 {
+                let t = step as f64 / 30.0;
+                rgb = clamp_rgb([
+                    col[0] + (255.0 - col[0]) * t,
+                    col[1] + (255.0 - col[1]) * t,
+                    col[2] + (255.0 - col[2]) * t,
+                ]);
+                if contrast_ratio(rgb, (0, 0, 0)) >= MIN_CONTRAST_RATIO {
+                    break;
+                }
+            }
+        }
+        rgb
+    }
 }
 
 #[cfg(test)]
@@ -244,15 +282,17 @@ mod tests {
                 for c in (50..=150).step_by(10) {
                     for s in (0..=100).step_by(20) {
                         for g in (0..=100).step_by(20) {
-                            let (bg, fg) = Adjustments {
+                            let adj = Adjustments {
                                 brightness: b,
                                 contrast: c,
                                 sepia: s,
                                 grayscale: g,
                                 dark_mode,
-                            }
-                            .palette();
+                            };
+                            let (bg, fg) = adj.palette();
                             assert!(contrast_ratio(bg, fg) >= 4.5);
+                            let dim = adj.soft_dim_rgb();
+                            assert!(contrast_ratio(dim, (0, 0, 0)) >= 4.5);
                         }
                     }
                 }

@@ -26,10 +26,10 @@ use windows::Win32::System::ProcessStatus::{
 };
 use windows::Win32::System::SystemInformation::GetTickCount64;
 use windows::Win32::System::Threading::{
-    CreateRemoteThread, GetExitCodeThread, GetProcessTimes, OpenProcess, PROCESS_CREATE_THREAD,
-    PROCESS_NAME_FORMAT, PROCESS_QUERY_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION,
-    PROCESS_VM_OPERATION, PROCESS_VM_READ, PROCESS_VM_WRITE, QueryFullProcessImageNameW,
-    WaitForSingleObject,
+    CreateRemoteThread, GetExitCodeProcess, GetExitCodeThread, GetProcessTimes, OpenProcess,
+    PROCESS_CREATE_THREAD, PROCESS_NAME_FORMAT, PROCESS_QUERY_INFORMATION,
+    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_OPERATION, PROCESS_VM_READ, PROCESS_VM_WRITE,
+    QueryFullProcessImageNameW, WaitForSingleObject,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetWindowThreadProcessId, IsWindow, IsWindowVisible,
@@ -91,6 +91,30 @@ pub struct SkinState {
     pub app_dark: i32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CanvasEyeConfig {
+    /// 0 = off, 1 = dark (Excel dark sheet / PPT soft-dim), 2 = soft_dim (Word/Excel/PPT multiply)
+    pub canvas_mode: u8,
+    pub dim_rgb: (u8, u8, u8),
+    pub dark_bg: u32,
+    pub dark_fg: u32,
+    pub img_enabled: bool,
+    pub img_brightness: i32, // 25..100
+}
+
+impl Default for CanvasEyeConfig {
+    fn default() -> Self {
+        Self {
+            canvas_mode: 0,
+            dim_rgb: (184, 184, 184),
+            dark_bg: 0xFF26_2C34,
+            dark_fg: 0xFFE0_E4EA,
+            img_enabled: false,
+            img_brightness: 70,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct Manifest {
     protocol: u32,
@@ -120,7 +144,30 @@ pub fn process_creation_time(pid: u32) -> Result<u64, String> {
 }
 
 pub fn is_process_alive(pid: u32, created_100ns: u64) -> bool {
-    matches!(process_creation_time(pid), Ok(actual) if actual == created_100ns)
+    unsafe {
+        let Ok(h) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else {
+            return false;
+        };
+        let mut exit_code = 0u32;
+        let still_active = GetExitCodeProcess(h, &mut exit_code).is_ok() && exit_code == 259;
+        let mut c = FILETIME::default();
+        let mut e = FILETIME::default();
+        let mut k = FILETIME::default();
+        let mut u = FILETIME::default();
+        let alive = still_active
+            && GetProcessTimes(h, &mut c, &mut e, &mut k, &mut u).is_ok()
+            && filetime_to_u64(c) == created_100ns
+            && filetime_to_u64(e) == 0;
+        let _ = CloseHandle(h);
+        alive
+    }
+}
+
+pub fn is_window_visible(hwnd: isize) -> bool {
+    unsafe {
+        let h = HWND(hwnd as *mut c_void);
+        IsWindow(Some(h)).as_bool() && IsWindowVisible(h).as_bool()
+    }
 }
 
 pub fn state_dir() -> PathBuf {
@@ -131,12 +178,20 @@ pub fn state_dir() -> PathBuf {
     base.join("WpsNativeEye")
 }
 
-pub fn all_wps_targets(preferred_hwnds: &HashMap<u32, isize>) -> Vec<Target> {
-    let mut by_pid: HashMap<u32, Vec<(isize, u32, AppKind)>> = HashMap::new();
+fn enum_wps_targets(preferred_hwnds: &HashMap<u32, isize>, visible_only: bool) -> Vec<Target> {
+    struct EnumCtx {
+        by_pid: HashMap<u32, Vec<(isize, u32, AppKind, bool)>>,
+        visible_only: bool,
+    }
+    let mut ctx = EnumCtx {
+        by_pid: HashMap::new(),
+        visible_only,
+    };
 
     unsafe extern "system" fn enum_cb(hwnd: HWND, lp: LPARAM) -> BOOL {
-        let map = &mut *(lp.0 as *mut HashMap<u32, Vec<(isize, u32, AppKind)>>);
-        if !IsWindowVisible(hwnd).as_bool() {
+        let ctx = &mut *(lp.0 as *mut EnumCtx);
+        let vis = IsWindowVisible(hwnd).as_bool();
+        if ctx.visible_only && !vis {
             return BOOL(1);
         }
         let cls = window_class_name(hwnd);
@@ -153,36 +208,51 @@ pub fn all_wps_targets(preferred_hwnds: &HashMap<u32, isize>) -> Vec<Target> {
         let tid = GetWindowThreadProcessId(hwnd, Some(&mut pid));
         if let Ok(exe) = process_name(pid) {
             if exe == kind.exe_name() {
-                map.entry(pid).or_default().push((hwnd.0 as isize, tid, kind));
+                ctx.by_pid
+                    .entry(pid)
+                    .or_default()
+                    .push((hwnd.0 as isize, tid, kind, vis));
             }
         }
         BOOL(1)
     }
 
     unsafe {
-        let _ = EnumWindows(Some(enum_cb), LPARAM(&mut by_pid as *mut _ as isize));
+        let _ = EnumWindows(Some(enum_cb), LPARAM(&mut ctx as *mut _ as isize));
     }
 
     let mut out = Vec::new();
-    for (pid, entries) in by_pid {
+    for (pid, entries) in ctx.by_pid {
         let wanted = preferred_hwnds.get(&pid).copied();
         let chosen = entries
             .iter()
             .copied()
-            .find(|e| Some(e.0) == wanted)
+            .find(|e| Some(e.0) == wanted && e.3)
+            .or_else(|| entries.iter().copied().find(|e| Some(e.0) == wanted))
+            .or_else(|| entries.iter().copied().find(|e| e.3))
             .unwrap_or(entries[0]);
         if let Ok(created_100ns) = process_creation_time(pid) {
-            out.push(Target {
-                pid,
-                hwnd: chosen.0,
-                thread: chosen.1,
-                created_100ns,
-                app_kind: chosen.2,
-            });
+            if is_process_alive(pid, created_100ns) {
+                out.push(Target {
+                    pid,
+                    hwnd: chosen.0,
+                    thread: chosen.1,
+                    created_100ns,
+                    app_kind: chosen.2,
+                });
+            }
         }
     }
     out.sort_by_key(|t| (t.app_kind as u8, t.pid));
     out
+}
+
+pub fn all_wps_targets(preferred_hwnds: &HashMap<u32, isize>) -> Vec<Target> {
+    enum_wps_targets(preferred_hwnds, true)
+}
+
+pub fn all_wps_targets_for_restore(preferred_hwnds: &HashMap<u32, isize>) -> Vec<Target> {
+    enum_wps_targets(preferred_hwnds, false)
 }
 
 pub fn sha256_bytes(data: &[u8]) -> Result<String, String> {
@@ -375,7 +445,8 @@ pub struct NativeAgent {
 impl NativeAgent {
     pub fn new() -> Result<Self, String> {
         let manifest: Manifest =
-            serde_json::from_str(EMBEDDED_MANIFEST).map_err(|e| format!("解析 manifest.json 失败: {e}"))?;
+            serde_json::from_str(EMBEDDED_MANIFEST.trim_start_matches('\u{feff}'))
+                .map_err(|e| format!("解析 manifest.json 失败: {e}"))?;
         let digest = sha256_bytes(EMBEDDED_DLL)?;
         if digest != manifest.agent_sha256 || manifest.protocol != PROTOCOL_VERSION {
             return Err("内嵌原生组件校验失败，请重新编译原生 DLL 与清单。".into());
@@ -628,7 +699,7 @@ impl NativeAgent {
         records: &[(&str, &str, &str, &str)],
         require_writer: bool,
     ) -> Result<Vec<(String, String, String, String)>, String> {
-        if !matches!(mode, 0 | 9 | 10 | 12 | 13 | 14) || records.len() > 20 {
+        if !matches!(mode, 0 | 9 | 10 | 12 | 13 | 14 | 15) || records.len() > 20 {
             return Err("不支持的原生请求参数".into());
         }
         unsafe {
@@ -861,6 +932,36 @@ impl NativeAgent {
     pub fn switch_skin(&mut self, target: &Target, skin_name: &str, search_dir: &str) -> Result<SkinState, String> {
         let res = self.run(target, 14, &[("switch", "state", skin_name, search_dir)], false)?;
         Self::parse_skin_state(&res)
+    }
+
+    pub fn set_canvas_eye(&mut self, target: &Target, cfg: CanvasEyeConfig) -> Result<String, String> {
+        let mode_str = match cfg.canvas_mode {
+            1 => "dark",
+            2 => "soft_dim",
+            _ => "off",
+        };
+        let dim_hex = format!("{:02x}{:02x}{:02x}", cfg.dim_rgb.0, cfg.dim_rgb.1, cfg.dim_rgb.2);
+        let bg_hex = format!("{:08x}", cfg.dark_bg);
+        let fg_hex = format!("{:08x}", cfg.dark_fg);
+        let img_on = if cfg.img_enabled { "1" } else { "0" };
+        let img_b = cfg.img_brightness.clamp(25, 100).to_string();
+        let records = [
+            ("set", "", "canvas_mode", mode_str),
+            ("set", "", "dim_color", dim_hex.as_str()),
+            ("set", "", "dark_bg", bg_hex.as_str()),
+            ("set", "", "dark_fg", fg_hex.as_str()),
+            ("set", "", "img_enabled", img_on),
+            ("set", "", "img_brightness", img_b.as_str()),
+            ("query", "", "state", ""),
+        ];
+        let res = self.run(target, 15, &records, false)?;
+        Ok(res.last().map(|r| r.3.clone()).unwrap_or_default())
+    }
+
+    #[allow(dead_code)]
+    pub fn query_canvas_eye(&mut self, target: &Target) -> Result<String, String> {
+        let res = self.run(target, 15, &[("query", "", "state", "")], false)?;
+        Ok(res.first().map(|r| r.3.clone()).unwrap_or_default())
     }
 
     fn parse_skin_state(res: &[(String, String, String, String)]) -> Result<SkinState, String> {

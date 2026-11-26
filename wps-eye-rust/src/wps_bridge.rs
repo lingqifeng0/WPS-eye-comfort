@@ -187,9 +187,17 @@ pub struct WriterSession {
     pub app: ComObj,
     pub pid: u32,
     pub hwnd: HWND,
+    pub doc_count: i32,
 }
 
 impl WriterSession {
+    pub fn live_doc_count(&self) -> i32 {
+        self.app
+            .get_obj("Documents")
+            .and_then(|d| d.get_i32("Count"))
+            .unwrap_or(0)
+    }
+
     pub fn get_blue_screen(&self) -> Result<bool, String> {
         self.app.get_obj("Options")?.get_bool("BlueScreen")
     }
@@ -227,32 +235,62 @@ impl WriterSession {
 }
 
 pub fn enumerate_writer_sessions() -> Vec<WriterSession> {
-    let mut roots: Vec<(HWND, u32)> = Vec::new();
+    use std::collections::HashMap;
+
+    struct TopHost {
+        hwnd: HWND,
+        pid: u32,
+        is_opus: bool,
+        visible: bool,
+    }
+
+    let mut hosts: Vec<TopHost> = Vec::new();
     unsafe extern "system" fn enum_top(hwnd: HWND, lp: LPARAM) -> BOOL {
-        let out = &mut *(lp.0 as *mut Vec<(HWND, u32)>);
-        if IsWindowVisible(hwnd).as_bool() && window_class_name(hwnd) == "OpusApp" {
-            let mut pid = 0u32;
-            GetWindowThreadProcessId(hwnd, Some(&mut pid));
-            if let Ok(name) = process_name(pid) {
-                if name == "wps.exe" {
-                    out.push((hwnd, pid));
-                }
+        let out = &mut *(lp.0 as *mut Vec<TopHost>);
+        let cls = window_class_name(hwnd);
+        let is_opus = cls == "OpusApp";
+        let is_wps_host = is_opus
+            || cls == "XLMAIN"
+            || cls == "PP12FrameClass"
+            || cls == "PP11FrameClass"
+            || cls == "KPromeMainWindow";
+        if !is_wps_host {
+            return BOOL(1);
+        }
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        if let Ok(name) = process_name(pid) {
+            if matches!(name.as_str(), "wps.exe" | "et.exe" | "wpp.exe") {
+                let visible = IsWindowVisible(hwnd).as_bool();
+                out.push(TopHost {
+                    hwnd,
+                    pid,
+                    is_opus,
+                    visible,
+                });
             }
         }
         BOOL(1)
     }
 
     unsafe {
-        let _ = EnumWindows(Some(enum_top), LPARAM(&mut roots as *mut _ as isize));
+        let _ = EnumWindows(Some(enum_top), LPARAM(&mut hosts as *mut _ as isize));
     }
 
-    let mut sessions = Vec::new();
-    let mut seen_pids: HashSet<u32> = HashSet::new();
+    // Prefer visible OpusApp first, then hidden OpusApp, then other WPS multi-tab host windows.
+    hosts.sort_by_key(|h| (!h.is_opus, !h.visible));
 
-    for (hwnd, pid) in roots {
-        if seen_pids.contains(&pid) {
-            continue;
+    let mut opus_by_pid: HashMap<u32, HWND> = HashMap::new();
+    for h in &hosts {
+        if h.is_opus {
+            opus_by_pid.entry(h.pid).or_insert(h.hwnd);
         }
+    }
+
+    // Collect _WwG child windows across ALL WPS hosts (handles WPS All-in-One multi-tab mode
+    // where a Writer _WwG tab may be hosted under an active PPT/Excel/Prometheus frame!).
+    let mut wwg_by_pid: HashMap<u32, Vec<(HWND, bool)>> = HashMap::new();
+    for h in &hosts {
         let mut children: Vec<HWND> = Vec::new();
         unsafe extern "system" fn enum_child(child: HWND, lp: LPARAM) -> BOOL {
             let out = &mut *(lp.0 as *mut Vec<HWND>);
@@ -262,28 +300,57 @@ pub fn enumerate_writer_sessions() -> Vec<WriterSession> {
             BOOL(1)
         }
         unsafe {
-            let _ = EnumChildWindows(Some(hwnd), Some(enum_child), LPARAM(&mut children as *mut _ as isize));
+            let _ = EnumChildWindows(
+                Some(h.hwnd),
+                Some(enum_child),
+                LPARAM(&mut children as *mut _ as isize),
+            );
+        }
+        for child in children {
+            let mut cpid = 0u32;
+            unsafe {
+                GetWindowThreadProcessId(child, Some(&mut cpid));
+            }
+            if let Ok(name) = process_name(cpid) {
+                if name == "wps.exe" {
+                    let cvis = unsafe { IsWindowVisible(child).as_bool() };
+                    wwg_by_pid.entry(cpid).or_default().push((child, cvis));
+                }
+            }
+        }
+    }
+
+    let mut sessions = Vec::new();
+    let mut seen_pids: HashSet<u32> = HashSet::new();
+
+    for (pid, mut candidates) in wwg_by_pid {
+        if seen_pids.contains(&pid) {
+            continue;
         }
         // Visible _WwG windows first
-        children.sort_by_key(|h| unsafe { !IsWindowVisible(*h).as_bool() });
+        candidates.sort_by_key(|&(_, vis)| !vis);
+        let root_hwnd = opus_by_pid
+            .get(&pid)
+            .copied()
+            .unwrap_or(candidates[0].0);
 
-        for child in children {
+        for (child, _) in candidates {
             let Ok(obj) = native_dispatch(child) else {
                 continue;
             };
             let Ok(app) = obj.get_obj("Application") else {
                 continue;
             };
-            let Ok(docs) = app.get_obj("Documents") else {
-                continue;
-            };
-            let Ok(count) = docs.get_i32("Count") else {
-                continue;
-            };
-            if count < 1 {
-                continue;
-            }
-            sessions.push(WriterSession { app, pid, hwnd });
+            let doc_count = app
+                .get_obj("Documents")
+                .and_then(|d| d.get_i32("Count"))
+                .unwrap_or(0);
+            sessions.push(WriterSession {
+                app,
+                pid,
+                hwnd: root_hwnd,
+                doc_count,
+            });
             seen_pids.insert(pid);
             break;
         }

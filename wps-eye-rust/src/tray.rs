@@ -25,6 +25,7 @@ pub const CMD_TOGGLE_PAGE: u32 = 4003;
 pub const CMD_RESTORE_ALL: u32 = 4004;
 pub const CMD_RESTORE_AND_EXIT: u32 = 4005;
 pub const CMD_TOGGLE_AUTOSTART: u32 = 4006;
+pub const CMD_TOGGLE_IMG: u32 = 4007;
 
 pub struct TrayIcon {
     hwnd: HWND,
@@ -137,7 +138,7 @@ impl TrayIcon {
         self.last_tip = tip.to_string();
     }
 
-    pub fn show_context_menu(&self, skin_on: bool, page_on: bool, autostart_on: bool) {
+    pub fn show_context_menu(&self, skin_on: bool, page_on: bool, img_on: bool, autostart_on: bool) {
         unsafe {
             let Ok(menu) = CreatePopupMenu() else {
                 return;
@@ -157,8 +158,13 @@ impl TrayIcon {
             );
             add(
                 CMD_TOGGLE_PAGE as usize,
-                "文字文档页面调色",
+                "文档页面护眼（文字 · 表格 · PPT）",
                 MF_STRING | if page_on { MF_CHECKED } else { MF_UNCHECKED },
+            );
+            add(
+                CMD_TOGGLE_IMG as usize,
+                "贴图夜间亮度（独立压暗文档图片）",
+                MF_STRING | if img_on { MF_CHECKED } else { MF_UNCHECKED },
             );
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
             add(

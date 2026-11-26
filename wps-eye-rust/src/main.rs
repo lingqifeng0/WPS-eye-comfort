@@ -13,10 +13,13 @@ use crate::autostart::AutoStartStatus;
 use crate::controller::{Command, ControllerHandle, WM_APP_STATE_UPDATED};
 use crate::palette::Adjustments;
 use crate::tray::{
-    CMD_RESTORE_ALL, CMD_RESTORE_AND_EXIT, CMD_SHOW_PANEL, CMD_TOGGLE_AUTOSTART, CMD_TOGGLE_PAGE,
-    CMD_TOGGLE_SKIN, IDI_APP_IDLE, TrayIcon, WM_TRAY_ICON, load_app_icon,
+    CMD_RESTORE_ALL, CMD_RESTORE_AND_EXIT, CMD_SHOW_PANEL, CMD_TOGGLE_AUTOSTART, CMD_TOGGLE_IMG,
+    CMD_TOGGLE_PAGE, CMD_TOGGLE_SKIN, IDI_APP_IDLE, TrayIcon, WM_TRAY_ICON, load_app_icon,
 };
-use crate::ui_d2d::{ControlId, D2dRenderer, LOGICAL_H, LOGICAL_W, Layout, SLIDERS, slider_get, slider_set};
+use crate::ui_d2d::{
+    ControlId, D2dRenderer, IMG_MAX, IMG_MIN, IMG_STEP, LOGICAL_H, LOGICAL_W, Layout, SLIDERS,
+    slider_get, slider_set,
+};
 use std::ffi::c_void;
 use windows::core::{BOOL, PCWSTR, w};
 use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError, HWND, LPARAM, LRESULT, RECT, WPARAM};
@@ -41,14 +44,15 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 const WM_MOUSELEAVE: u32 = 0x02A3;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, FindWindowW, GetMessageW,
-    GetWindowLongPtrW, GWLP_USERDATA, HMENU, IDC_ARROW, IDC_HAND, ICON_BIG, ICON_SMALL, KillTimer,
-    LoadCursorW, MB_ICONERROR, MB_OK, MSG, MessageBoxW, PostMessageW, PostQuitMessage,
-    RegisterClassExW, RegisterWindowMessageW, SW_HIDE, SW_RESTORE, SW_SHOW, SWP_NOSIZE,
-    SWP_NOZORDER, SWP_SHOWWINDOW, SendMessageW, SetCursor, SetForegroundWindow, SetTimer,
-    SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage, WM_APP, WM_CLOSE, WM_COMMAND,
-    WM_DESTROY, WM_DPICHANGED, WM_ENDSESSION, WM_ERASEBKGND, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_RBUTTONUP, WM_SETCURSOR, WM_SETICON, WM_SIZE,
-    WM_TIMER, WNDCLASSEXW, WS_CAPTION, WS_EX_APPWINDOW, WS_MINIMIZEBOX, WS_SYSMENU,
+    GetWindowLongPtrW, GWLP_USERDATA, HMENU, IDC_ARROW, IDC_HAND, ICON_BIG, ICON_SMALL, IDYES,
+    KillTimer, LoadCursorW, MB_ICONERROR, MB_ICONWARNING, MB_OK, MB_YESNO, MSG, MessageBoxW,
+    PostMessageW, PostQuitMessage, RegisterClassExW, RegisterWindowMessageW, SW_HIDE, SW_RESTORE,
+    SW_SHOW, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SendMessageW, SetCursor,
+    SetForegroundWindow, SetTimer, SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage,
+    WM_APP, WM_CLOSE, WM_COMMAND, WM_DESTROY, WM_DPICHANGED, WM_ENDSESSION, WM_ERASEBKGND,
+    WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_RBUTTONUP,
+    WM_SETCURSOR, WM_SETICON, WM_SIZE, WM_TIMER, WNDCLASSEXW, WS_CAPTION, WS_EX_APPWINDOW,
+    WS_MINIMIZEBOX, WS_SYSMENU,
 };
 
 const WINDOW_CLASS: PCWSTR = w!("WpsEyeComfortRustPanel");
@@ -57,6 +61,7 @@ const WM_APP_SHOW_PANEL: u32 = WM_APP + 20;
 
 const TIMER_SYNC: usize = 1;
 const TIMER_SLIDER_DEBOUNCE: usize = 2;
+const TIMER_IMG_DEBOUNCE: usize = 3;
 
 struct AppState {
     hwnd: HWND,
@@ -66,32 +71,54 @@ struct AppState {
     tray: Option<TrayIcon>,
     autostart: AutoStartStatus,
     taskbar_created_msg: u32,
-    live_adj: Adjustments,
+    active_dark_mode: bool,
+    live_mode1: Adjustments,
+    live_mode2: Adjustments,
+    live_img_brightness: i32,
     hovered: Option<ControlId>,
     dragging_slider: Option<usize>,
+    dragging_img: bool,
     tracking_mouse: bool,
     visible: bool,
     exiting: bool,
 }
 
 impl AppState {
+    fn cur_adj(&self) -> Adjustments {
+        if self.active_dark_mode {
+            self.live_mode1
+        } else {
+            self.live_mode2
+        }
+    }
+
+    fn cur_adj_mut(&mut self) -> &mut Adjustments {
+        if self.active_dark_mode {
+            &mut self.live_mode1
+        } else {
+            &mut self.live_mode2
+        }
+    }
+
     fn sync_tray(&mut self) {
         let Some(ref ctrl) = self.controller else {
             return;
         };
         let snap = ctrl.snapshot();
-        let active = snap.skin_enabled || snap.page_enabled;
-        let tip = if snap.skin_enabled && snap.page_enabled {
-            "WPS 护眼控制器 · 深色外观 + 页面调色运行中"
-        } else if snap.skin_enabled {
-            "WPS 护眼控制器 · 原生深色外观运行中"
-        } else if snap.page_enabled {
-            "WPS 护眼控制器 · 文字页面调色运行中"
+        let active = snap.skin_enabled || snap.page_enabled || snap.img_enabled;
+        let tip = if active {
+            let mut parts = Vec::new();
+            if snap.skin_enabled { parts.push("深色外观"); }
+            if snap.page_enabled {
+                parts.push(if snap.dark_mode { "深底模式" } else { "夜间柔暗" });
+            }
+            if snap.img_enabled { parts.push("贴图降亮"); }
+            format!("WPS 护眼控制器 · {}运行中", parts.join(" + "))
         } else {
-            "WPS 护眼控制器 · 待机中（左键打开，右键菜单）"
+            "WPS 护眼控制器 · 待机中（左键打开，右键菜单）".into()
         };
         if let Some(ref mut tray) = self.tray {
-            tray.update(active, tip);
+            tray.update(active, &tip);
         }
     }
 
@@ -131,6 +158,7 @@ impl AppState {
         self.visible = false;
         self.hovered = None;
         self.dragging_slider = None;
+        self.dragging_img = false;
         // Release Direct2D/DirectWrite resources completely & trim working set -> ~3 MB tray RAM!
         if let Some(ref mut r) = self.renderer {
             r.release_render_target();
@@ -149,6 +177,7 @@ impl AppState {
         unsafe {
             let _ = KillTimer(Some(self.hwnd), TIMER_SYNC);
             let _ = KillTimer(Some(self.hwnd), TIMER_SLIDER_DEBOUNCE);
+            let _ = KillTimer(Some(self.hwnd), TIMER_IMG_DEBOUNCE);
         }
         let result = if let Some(ref ctrl) = self.controller {
             ctrl.restore_all_and_wait()
@@ -156,14 +185,18 @@ impl AppState {
             (true, String::new())
         };
         if !result.0 {
-            self.exiting = false;
             self.show_panel();
-            let msg = format!("{}\n\n请处理后重试“恢复原版并退出”。", result.1);
-            show_error_box(self.hwnd, "恢复尚未完成", &msg);
-            unsafe {
-                let _ = SetTimer(Some(self.hwnd), TIMER_SYNC, 2000, None);
+            let msg = format!(
+                "{}\n\n选择「是」立即强制退出控制器（下次启动仍可自动恢复）；\n选择「否」返回面板稍后重试。",
+                result.1
+            );
+            if !confirm_force_exit(self.hwnd, "部分窗口恢复受阻", &msg) {
+                self.exiting = false;
+                unsafe {
+                    let _ = SetTimer(Some(self.hwnd), TIMER_SYNC, 2000, None);
+                }
+                return;
             }
-            return;
         }
         if let Some(ref mut t) = self.tray {
             t.remove();
@@ -186,12 +219,31 @@ impl AppState {
 
     fn push_adj_debounced(&mut self, immediate: bool) {
         if let Some(ref ctrl) = self.controller {
-            ctrl.send(Command::UpdateAdjustments(self.live_adj, immediate));
+            ctrl.send(Command::UpdateAdjustments {
+                dark_mode: self.active_dark_mode,
+                mode1: self.live_mode1,
+                mode2: self.live_mode2,
+                apply_now: immediate,
+            });
         }
         unsafe {
             let _ = KillTimer(Some(self.hwnd), TIMER_SLIDER_DEBOUNCE);
             if !immediate {
                 let _ = SetTimer(Some(self.hwnd), TIMER_SLIDER_DEBOUNCE, 180, None);
+            }
+            let _ = InvalidateRect(Some(self.hwnd), None, false);
+        }
+    }
+
+    fn push_img_debounced(&mut self, immediate: bool) {
+        self.live_img_brightness = self.live_img_brightness.clamp(IMG_MIN, IMG_MAX);
+        if let Some(ref ctrl) = self.controller {
+            ctrl.send(Command::UpdateImgBrightness(self.live_img_brightness, immediate));
+        }
+        unsafe {
+            let _ = KillTimer(Some(self.hwnd), TIMER_IMG_DEBOUNCE);
+            if !immediate {
+                let _ = SetTimer(Some(self.hwnd), TIMER_IMG_DEBOUNCE, 140, None);
             }
             let _ = InvalidateRect(Some(self.hwnd), None, false);
         }
@@ -211,21 +263,21 @@ impl AppState {
                 }
             }
             ControlId::ModeDark => {
-                self.live_adj.dark_mode = true;
+                self.active_dark_mode = true;
                 self.push_adj_debounced(true);
             }
             ControlId::ModeSoftLight => {
-                self.live_adj.dark_mode = false;
+                self.active_dark_mode = false;
                 self.push_adj_debounced(true);
             }
             ControlId::SliderMinus(i) => {
-                let cur = slider_get(&self.live_adj, i);
-                slider_set(&mut self.live_adj, i, cur - SLIDERS[i].step);
+                let cur = slider_get(&self.cur_adj(), i);
+                slider_set(self.cur_adj_mut(), i, cur - SLIDERS[i].step);
                 self.push_adj_debounced(true);
             }
             ControlId::SliderPlus(i) => {
-                let cur = slider_get(&self.live_adj, i);
-                slider_set(&mut self.live_adj, i, cur + SLIDERS[i].step);
+                let cur = slider_get(&self.cur_adj(), i);
+                slider_set(self.cur_adj_mut(), i, cur + SLIDERS[i].step);
                 self.push_adj_debounced(true);
             }
             ControlId::SliderTrack(i) => {
@@ -234,15 +286,43 @@ impl AppState {
                     SetCapture(self.hwnd);
                 }
                 let nv = self.layout.value_from_x(i, x);
-                slider_set(&mut self.live_adj, i, nv);
+                slider_set(self.cur_adj_mut(), i, nv);
                 self.push_adj_debounced(false);
             }
             ControlId::ResetParams => {
-                self.live_adj = Adjustments {
-                    dark_mode: self.live_adj.dark_mode,
-                    ..Adjustments::default()
-                };
+                if self.active_dark_mode {
+                    self.live_mode1 = Adjustments {
+                        dark_mode: true,
+                        ..Adjustments::default()
+                    };
+                } else {
+                    self.live_mode2 = Adjustments {
+                        dark_mode: false,
+                        ..Adjustments::default()
+                    };
+                }
                 self.push_adj_debounced(true);
+            }
+            ControlId::ImgToggle => {
+                if let Some(ref ctrl) = self.controller {
+                    ctrl.send(Command::SetImgEnabled(!snap.img_enabled));
+                }
+            }
+            ControlId::ImgMinus => {
+                self.live_img_brightness = (self.live_img_brightness - IMG_STEP).clamp(IMG_MIN, IMG_MAX);
+                self.push_img_debounced(true);
+            }
+            ControlId::ImgPlus => {
+                self.live_img_brightness = (self.live_img_brightness + IMG_STEP).clamp(IMG_MIN, IMG_MAX);
+                self.push_img_debounced(true);
+            }
+            ControlId::ImgTrack => {
+                self.dragging_img = true;
+                unsafe {
+                    SetCapture(self.hwnd);
+                }
+                self.live_img_brightness = self.layout.img_value_from_x(x);
+                self.push_img_debounced(false);
             }
             ControlId::AutoStartToggle => {
                 self.toggle_autostart();
@@ -264,6 +344,19 @@ fn show_error_box(hwnd: HWND, title: &str, msg: &str) {
     let m: Vec<u16> = msg.encode_utf16().chain(std::iter::once(0)).collect();
     unsafe {
         let _ = MessageBoxW(Some(hwnd), PCWSTR(m.as_ptr()), PCWSTR(t.as_ptr()), MB_OK | MB_ICONERROR);
+    }
+}
+
+fn confirm_force_exit(hwnd: HWND, title: &str, msg: &str) -> bool {
+    let t: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
+    let m: Vec<u16> = msg.encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe {
+        MessageBoxW(
+            Some(hwnd),
+            PCWSTR(m.as_ptr()),
+            PCWSTR(t.as_ptr()),
+            MB_YESNO | MB_ICONWARNING,
+        ) == IDYES
     }
 }
 
@@ -343,6 +436,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
             if state.renderer.is_none() {
                 state.renderer = D2dRenderer::new().ok();
             }
+            let cur_adj = state.cur_adj();
             if let (Some(ref ctrl), Some(ref mut ren)) = (&state.controller, &mut state.renderer) {
                 let snap = ctrl.snapshot();
                 ren.paint(
@@ -350,9 +444,12 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                     hdc,
                     &snap,
                     &state.autostart,
-                    state.live_adj,
+                    state.active_dark_mode,
+                    cur_adj,
+                    state.live_img_brightness,
                     state.hovered,
                     state.dragging_slider,
+                    state.dragging_img,
                 );
             }
             let _ = EndPaint(hwnd, &ps);
@@ -384,9 +481,15 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
             let (x, y) = state.dip_pos(lp);
             if let Some(idx) = state.dragging_slider {
                 let nv = state.layout.value_from_x(idx, x);
-                if slider_get(&state.live_adj, idx) != nv {
-                    slider_set(&mut state.live_adj, idx, nv);
+                if slider_get(&state.cur_adj(), idx) != nv {
+                    slider_set(state.cur_adj_mut(), idx, nv);
                     state.push_adj_debounced(false);
+                }
+            } else if state.dragging_img {
+                let nv = state.layout.img_value_from_x(x);
+                if state.live_img_brightness != nv {
+                    state.live_img_brightness = nv;
+                    state.push_img_debounced(false);
                 }
             } else {
                 let h = state.layout.hit_test(x, y);
@@ -408,7 +511,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
         WM_SETCURSOR => {
             let ht = (lp.0 & 0xFFFF) as u32;
             if ht == 1 {
-                let cur_id = if state.hovered.is_some() || state.dragging_slider.is_some() {
+                let cur_id = if state.hovered.is_some() || state.dragging_slider.is_some() || state.dragging_img {
                     IDC_HAND
                 } else {
                     IDC_ARROW
@@ -431,6 +534,11 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                 let _ = ReleaseCapture();
                 state.push_adj_debounced(true);
             }
+            if state.dragging_img {
+                state.dragging_img = false;
+                let _ = ReleaseCapture();
+                state.push_img_debounced(true);
+            }
             return LRESULT(0);
         }
         WM_TIMER => {
@@ -441,7 +549,17 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
             } else if wp.0 == TIMER_SLIDER_DEBOUNCE {
                 let _ = KillTimer(Some(hwnd), TIMER_SLIDER_DEBOUNCE);
                 if let Some(ref ctrl) = state.controller {
-                    ctrl.send(Command::UpdateAdjustments(state.live_adj, true));
+                    ctrl.send(Command::UpdateAdjustments {
+                        dark_mode: state.active_dark_mode,
+                        mode1: state.live_mode1,
+                        mode2: state.live_mode2,
+                        apply_now: true,
+                    });
+                }
+            } else if wp.0 == TIMER_IMG_DEBOUNCE {
+                let _ = KillTimer(Some(hwnd), TIMER_IMG_DEBOUNCE);
+                if let Some(ref ctrl) = state.controller {
+                    ctrl.send(Command::UpdateImgBrightness(state.live_img_brightness, true));
                 }
             }
             return LRESULT(0);
@@ -471,7 +589,12 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                 state.autostart = autostart::query_status();
                 let snap = state.controller.as_ref().map(|c| c.snapshot()).unwrap_or_default();
                 if let Some(ref t) = state.tray {
-                    t.show_context_menu(snap.skin_enabled, snap.page_enabled, state.autostart.enabled);
+                    t.show_context_menu(
+                        snap.skin_enabled,
+                        snap.page_enabled,
+                        snap.img_enabled,
+                        state.autostart.enabled,
+                    );
                 }
             }
             return LRESULT(0);
@@ -489,6 +612,11 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                 CMD_TOGGLE_PAGE => {
                     if let Some(ref ctrl) = state.controller {
                         ctrl.send(Command::SetPageEnabled(!snap.page_enabled));
+                    }
+                }
+                CMD_TOGGLE_IMG => {
+                    if let Some(ref ctrl) = state.controller {
+                        ctrl.send(Command::SetImgEnabled(!snap.img_enabled));
                     }
                 }
                 CMD_TOGGLE_AUTOSTART => state.toggle_autostart(),
@@ -619,10 +747,13 @@ fn run_self_test(out_json: &str) -> Result<(), String> {
         checks.push("unmodified_restore_preserves_protect_eyes".into());
 
         // Apply page -> ProtectEyes off, BlueScreen on -> restore page -> ProtectEyes MUST return True!
-        ctrl.send(Command::UpdateAdjustments(
-            Adjustments { brightness: 100, contrast: 100, sepia: 100, grayscale: 0, dark_mode: true },
-            false,
-        ));
+        let m2_default = Adjustments { dark_mode: false, ..Adjustments::default() };
+        ctrl.send(Command::UpdateAdjustments {
+            dark_mode: true,
+            mode1: Adjustments { brightness: 100, contrast: 100, sepia: 100, grayscale: 0, dark_mode: true },
+            mode2: m2_default,
+            apply_now: false,
+        });
         ctrl.send(Command::SetPageEnabled(true));
         wait_done(&ctrl);
         if let Some(err) = &ctrl.snapshot().error_text {
@@ -636,7 +767,12 @@ fn run_self_test(out_json: &str) -> Result<(), String> {
         let gray_adj = Adjustments { brightness: 100, contrast: 100, sepia: 100, grayscale: 100, dark_mode: true };
         let (gbg, gfg) = gray_adj.palette();
         assert!(contrast_ratio(gbg, gfg) >= 4.5 && gbg.0 == gbg.1 && gbg.1 == gbg.2);
-        ctrl.send(Command::UpdateAdjustments(gray_adj, true));
+        ctrl.send(Command::UpdateAdjustments {
+            dark_mode: true,
+            mode1: gray_adj,
+            mode2: m2_default,
+            apply_now: true,
+        });
         wait_done(&ctrl);
         let mut probe_agent = crate::native_agent::NativeAgent::new()?;
         let wt = targets.iter().find(|t| t.app_kind == AppKind::Wps).unwrap();
@@ -704,6 +840,7 @@ fn main() {
     let auto_start_boot = args.iter().any(|a| a == "--auto-start");
     let auto_skin = args.iter().any(|a| a == "--enable-skin");
     let auto_page = args.iter().any(|a| a == "--enable-page");
+    let auto_img = args.iter().any(|a| a == "--enable-img");
 
     // Single-instance check: if already running, bring the existing panel window forward!
     unsafe {
@@ -725,7 +862,11 @@ fn main() {
             return;
         }
     };
-    let init_adj = controller.snapshot().adjustments;
+    let init_snap = controller.snapshot();
+    let init_dark_mode = init_snap.dark_mode;
+    let init_mode1 = init_snap.mode1_adj;
+    let init_mode2 = init_snap.mode2_adj;
+    let init_img_brightness = init_snap.img_brightness;
 
     // Lazy-initialize Direct2D only when the panel is actually shown (keeps --minimized boot < 4 MB RAM!)
     let renderer = if start_minimized {
@@ -800,12 +941,15 @@ fn main() {
         }
 
         controller.set_notify_hwnd(hwnd.0 as isize);
-        let (pref_skin, pref_page) = controller.saved_auto_start_prefs();
+        let (pref_skin, pref_page, pref_img) = controller.saved_auto_start_prefs();
         if auto_skin || (auto_start_boot && pref_skin) {
             controller.send(Command::SetSkinEnabled(true));
         }
         if auto_page || (auto_start_boot && pref_page) {
             controller.send(Command::SetPageEnabled(true));
+        }
+        if auto_img || (auto_start_boot && pref_img) {
+            controller.send(Command::SetImgEnabled(true));
         }
 
         let tray = TrayIcon::new(hwnd);
@@ -818,9 +962,13 @@ fn main() {
             tray: Some(tray),
             autostart: autostart::query_status(),
             taskbar_created_msg,
-            live_adj: init_adj,
+            active_dark_mode: init_dark_mode,
+            live_mode1: init_mode1,
+            live_mode2: init_mode2,
+            live_img_brightness: init_img_brightness,
             hovered: None,
             dragging_slider: None,
+            dragging_img: false,
             tracking_mouse: false,
             visible: !start_minimized,
             exiting: false,

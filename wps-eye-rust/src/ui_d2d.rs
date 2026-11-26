@@ -32,7 +32,11 @@ use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
 
 pub const LOGICAL_W: f32 = 520.0;
-pub const LOGICAL_H: f32 = 656.0;
+pub const LOGICAL_H: f32 = 706.0;
+
+pub const IMG_MIN: i32 = 25;
+pub const IMG_MAX: i32 = 100;
+pub const IMG_STEP: i32 = 5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ControlId {
@@ -44,6 +48,10 @@ pub enum ControlId {
     SliderMinus(usize),
     SliderPlus(usize),
     ResetParams,
+    ImgToggle,
+    ImgMinus,
+    ImgTrack,
+    ImgPlus,
     AutoStartToggle,
     RestoreAll,
     HideToTray,
@@ -129,40 +137,41 @@ fn pt_in(r: D2D_RECT_F, x: f32, y: f32) -> bool {
 pub struct Layout {
     pub hits: Vec<HitBox>,
     pub slider_tracks: [D2D_RECT_F; 4],
+    pub img_track: D2D_RECT_F,
 }
 
 impl Layout {
     pub fn compute() -> Self {
-        let mut hits = Vec::with_capacity(26);
+        let mut hits = Vec::with_capacity(32);
         let pad = 16.0;
         let cw = LOGICAL_W - pad * 2.0; // 488
 
-        // Card 1: Native Dark Skin (y = 80..172)
+        // Card 1: Native Dark Skin (y = 70..146)
         hits.push(HitBox {
             id: ControlId::SkinToggle,
-            rect: rect(pad + cw - 16.0 - 48.0, 96.0, pad + cw - 16.0, 122.0),
+            rect: rect(pad + cw - 16.0 - 48.0, 82.0, pad + cw - 16.0, 108.0),
         });
 
-        // Card 2: Writer Page Palette (y = 182..524)
+        // Card 2: Document Page Eye Comfort (y = 154..484)
         hits.push(HitBox {
             id: ControlId::PageToggle,
-            rect: rect(pad + cw - 16.0 - 48.0, 196.0, pad + cw - 16.0, 222.0),
+            rect: rect(pad + cw - 16.0 - 48.0, 165.0, pad + cw - 16.0, 191.0),
         });
 
-        // Segmented mode selector (y = 232..264)
+        // Segmented mode selector (y = 200..230)
         let seg_l = pad + 16.0;
         let seg_r = pad + cw - 16.0;
         let seg_mid = (seg_l + seg_r) * 0.5;
         hits.push(HitBox {
             id: ControlId::ModeDark,
-            rect: rect(seg_l + 3.0, 235.0, seg_mid - 2.0, 261.0),
+            rect: rect(seg_l + 3.0, 203.0, seg_mid - 2.0, 227.0),
         });
         hits.push(HitBox {
             id: ControlId::ModeSoftLight,
-            rect: rect(seg_mid + 2.0, 235.0, seg_r - 3.0, 261.0),
+            rect: rect(seg_mid + 2.0, 203.0, seg_r - 3.0, 227.0),
         });
 
-        // 4 sliders (y = 362..478, stride 29)
+        // 4 sliders (y = 319..431, stride 28)
         let mut slider_tracks = [rect(0.0, 0.0, 0.0, 0.0); 4];
         let minus_l = pad + 16.0 + 54.0;
         let minus_r = minus_l + 24.0;
@@ -173,7 +182,7 @@ impl Layout {
         let trk_r = plus_l - 12.0;
 
         for i in 0..4 {
-            let y0 = 362.0 + i as f32 * 29.0;
+            let y0 = 319.0 + i as f32 * 28.0;
             let tr = rect(trk_l, y0 + 1.0, trk_r, y0 + 23.0);
             slider_tracks[i] = tr;
             hits.push(HitBox { id: ControlId::SliderMinus(i), rect: rect(minus_l, y0 + 1.0, minus_r, y0 + 23.0) });
@@ -184,24 +193,35 @@ impl Layout {
         // Reset button inside Card 2 bottom right
         hits.push(HitBox {
             id: ControlId::ResetParams,
-            rect: rect(pad + cw - 16.0 - 78.0, 486.0, pad + cw - 16.0, 512.0),
+            rect: rect(pad + cw - 16.0 - 84.0, 444.0, pad + cw - 16.0, 470.0),
         });
 
-        // Card 3: Auto-Start on Boot (y = 534..596)
+        // Card 3: Dedicated Image Night Brightness Bar (y = 492..580)
+        hits.push(HitBox {
+            id: ControlId::ImgToggle,
+            rect: rect(pad + cw - 16.0 - 48.0, 502.0, pad + cw - 16.0, 528.0),
+        });
+        let img_y0 = 532.0;
+        let img_track = rect(trk_l, img_y0 + 1.0, trk_r, img_y0 + 23.0);
+        hits.push(HitBox { id: ControlId::ImgMinus, rect: rect(minus_l, img_y0 + 1.0, minus_r, img_y0 + 23.0) });
+        hits.push(HitBox { id: ControlId::ImgTrack, rect: img_track });
+        hits.push(HitBox { id: ControlId::ImgPlus, rect: rect(plus_l, img_y0 + 1.0, plus_r, img_y0 + 23.0) });
+
+        // Card 4: Auto-Start on Boot (y = 588..648)
         hits.push(HitBox {
             id: ControlId::AutoStartToggle,
-            rect: rect(pad + cw - 16.0 - 48.0, 552.0, pad + cw - 16.0, 578.0),
+            rect: rect(pad + cw - 16.0 - 48.0, 605.0, pad + cw - 16.0, 631.0),
         });
 
-        // Bottom footer buttons (y = 608..642)
+        // Bottom footer buttons (y = 658..692)
         let hide_r = LOGICAL_W - pad;
         let hide_l = hide_r - 92.0;
         let rest_r = hide_l - 10.0;
         let rest_l = rest_r - 92.0;
-        hits.push(HitBox { id: ControlId::RestoreAll, rect: rect(rest_l, 608.0, rest_r, 642.0) });
-        hits.push(HitBox { id: ControlId::HideToTray, rect: rect(hide_l, 608.0, hide_r, 642.0) });
+        hits.push(HitBox { id: ControlId::RestoreAll, rect: rect(rest_l, 658.0, rest_r, 692.0) });
+        hits.push(HitBox { id: ControlId::HideToTray, rect: rect(hide_l, 658.0, hide_r, 692.0) });
 
-        Self { hits, slider_tracks }
+        Self { hits, slider_tracks, img_track }
     }
 
     pub fn hit_test(&self, x: f32, y: f32) -> Option<ControlId> {
@@ -213,6 +233,13 @@ impl Layout {
         let sp = SLIDERS[idx];
         let t = ((x - tr.left) / (tr.right - tr.left).max(1.0)).clamp(0.0, 1.0);
         let raw = sp.min as f32 + t * (sp.max - sp.min) as f32;
+        raw.round() as i32
+    }
+
+    pub fn img_value_from_x(&self, x: f32) -> i32 {
+        let tr = self.img_track;
+        let t = ((x - tr.left) / (tr.right - tr.left).max(1.0)).clamp(0.0, 1.0);
+        let raw = IMG_MIN as f32 + t * (IMG_MAX - IMG_MIN) as f32;
         raw.round() as i32
     }
 }
@@ -327,9 +354,12 @@ impl D2dRenderer {
         hdc: HDC,
         snap: &UiSnapshot,
         autostart: &AutoStartStatus,
+        active_dark_mode: bool,
         live_adj: Adjustments,
+        live_img_brightness: i32,
         hovered: Option<ControlId>,
         dragging: Option<usize>,
+        dragging_img: bool,
     ) {
         let Ok(rt) = self.ensure_rt(hwnd) else {
             return;
@@ -379,28 +409,24 @@ impl D2dRenderer {
             let cw = LOGICAL_W - pad * 2.0;
 
             // ----------------------------------------------------------
-            // 1. Header with bespoke vector emblem + live connection pill
+            // 1. Header with bespoke vector emblem + live connection pill (NO Rust badge!)
             // ----------------------------------------------------------
-            // Mini eye-crescent squircle badge (x=16..50, y=14..48)
-            fill_rr(rrect(pad, 14.0, pad + 34.0, 48.0, 9.0), rgb(30, 42, 62));
-            stroke_rr(rrect(pad + 0.5, 14.5, pad + 33.5, 47.5, 8.5), rgba(120, 160, 225, 0.45), 1.0);
+            fill_rr(rrect(pad, 12.0, pad + 34.0, 46.0, 9.0), rgb(30, 42, 62));
+            stroke_rr(rrect(pad + 0.5, 12.5, pad + 33.5, 45.5, 8.5), rgba(120, 160, 225, 0.45), 1.0);
             if let Some(b_ring) = brush(rgb(202, 224, 255)) {
-                let eye = ellipse(pad + 17.0, 31.0, 11.0, 6.5);
+                let eye = ellipse(pad + 17.0, 29.0, 11.0, 6.5);
                 rt.DrawEllipse(&eye, &b_ring, 1.8, None);
             }
             if let Some(b_moon) = brush(rgb(245, 190, 96)) {
-                let m = ellipse(pad + 16.5, 31.0, 4.2, 4.2);
+                let m = ellipse(pad + 16.5, 29.0, 4.2, 4.2);
                 rt.FillEllipse(&m, &b_moon);
             }
             if let Some(b_cut) = brush(rgb(24, 34, 50)) {
-                let cut = ellipse(pad + 18.6, 29.6, 3.4, 3.4);
+                let cut = ellipse(pad + 18.6, 27.6, 3.4, 3.4);
                 rt.FillEllipse(&cut, &b_cut);
             }
 
-            draw_text("WPS 护眼控制器", &self.fmt_title, rect(pad + 44.0, 12.0, 230.0, 36.0), rgb(238, 242, 248));
-            // Compact tag pill
-            fill_rr(rrect(210.0, 17.0, 274.0, 34.0, 8.0), rgba(59, 130, 246, 0.16));
-            draw_text("Rust 原生", &self.fmt_small_center, rect(210.0, 17.0, 274.0, 34.0), rgb(125, 185, 255));
+            draw_text("WPS 护眼控制器", &self.fmt_title, rect(pad + 44.0, 10.0, 300.0, 34.0), rgb(238, 242, 248));
 
             // Connected WPS badge on top-right
             let total_wps = snap.wps_count + snap.wpp_count + snap.et_count;
@@ -413,8 +439,8 @@ impl D2dRenderer {
             } else {
                 (rgba(148, 163, 184, 0.12), rgb(148, 163, 184), "○ 等待 WPS".into())
             };
-            fill_rr(rrect(LOGICAL_W - pad - 154.0, 15.0, LOGICAL_W - pad, 37.0, 11.0), pill_bg);
-            draw_text(&pill_txt, &self.fmt_small_center, rect(LOGICAL_W - pad - 154.0, 15.0, LOGICAL_W - pad, 37.0), pill_fg);
+            fill_rr(rrect(LOGICAL_W - pad - 154.0, 13.0, LOGICAL_W - pad, 35.0, 11.0), pill_bg);
+            draw_text(&pill_txt, &self.fmt_small_center, rect(LOGICAL_W - pad - 154.0, 13.0, LOGICAL_W - pad, 35.0), pill_fg);
 
             // Status subtitle line
             let status_col = if snap.error_text.is_some() {
@@ -422,31 +448,29 @@ impl D2dRenderer {
             } else {
                 rgb(142, 155, 176)
             };
-            draw_text(&snap.status_text, &self.fmt_small, rect(pad + 44.0, 38.0, LOGICAL_W - pad, 74.0), status_col);
+            draw_text(&snap.status_text, &self.fmt_small, rect(pad + 44.0, 36.0, LOGICAL_W - pad, 66.0), status_col);
 
             // ----------------------------------------------------------
-            // 2. Card 1: Native 2025 Dark Skin (y = 80..172)
+            // 2. Card 1: Native 2025 Dark Skin (y = 70..146)
             // ----------------------------------------------------------
-            fill_rr(rrect(pad, 80.0, pad + cw, 172.0, 12.0), rgb(27, 33, 44));
+            fill_rr(rrect(pad, 70.0, pad + cw, 146.0, 12.0), rgb(27, 33, 44));
             stroke_rr(
-                rrect(pad + 0.5, 80.5, pad + cw - 0.5, 171.5, 11.5),
+                rrect(pad + 0.5, 70.5, pad + cw - 0.5, 145.5, 11.5),
                 if snap.skin_enabled { rgba(59, 130, 246, 0.55) } else { rgb(43, 52, 69) },
                 1.0,
             );
-            draw_text("原生深色外观", &self.fmt_section, rect(pad + 16.0, 94.0, 175.0, 120.0), rgb(238, 242, 248));
+            draw_text("原生深色外观", &self.fmt_section, rect(pad + 16.0, 81.0, 175.0, 107.0), rgb(238, 242, 248));
 
-            // Mini app chips: 文字 / PPT / 表格
             let mut cx = pad + 114.0;
             for (chip, w_chip) in [("文字", 38.0f32), ("PPT", 38.0), ("表格", 38.0)] {
-                fill_rr(rrect(cx, 98.0, cx + w_chip, 116.0, 6.0), rgb(37, 45, 60));
-                draw_text(chip, &self.fmt_small_center, rect(cx, 98.0, cx + w_chip, 116.0), rgb(174, 188, 210));
+                fill_rr(rrect(cx, 85.0, cx + w_chip, 103.0, 6.0), rgb(37, 45, 60));
+                draw_text(chip, &self.fmt_small_center, rect(cx, 85.0, cx + w_chip, 103.0), rgb(174, 188, 210));
                 cx += w_chip + 6.0;
             }
 
-            // Pill Toggle Switch for Skin
             self.draw_toggle(
                 &rt,
-                rect(pad + cw - 16.0 - 48.0, 96.0, pad + cw - 16.0, 122.0),
+                rect(pad + cw - 16.0 - 48.0, 82.0, pad + cw - 16.0, 108.0),
                 snap.skin_enabled,
                 hovered == Some(ControlId::SkinToggle),
             );
@@ -454,139 +478,163 @@ impl D2dRenderer {
             draw_text(
                 &snap.skin_msg,
                 &self.fmt_small,
-                rect(pad + 16.0, 128.0, pad + cw - 16.0, 166.0),
+                rect(pad + 16.0, 114.0, pad + cw - 16.0, 142.0),
                 rgb(142, 155, 176),
             );
 
             // ----------------------------------------------------------
-            // 3. Card 2: Writer Page Palette (y = 182..524)
+            // 3. Card 2: Document Page Eye Comfort — Mode 1 & Mode 2 (y = 154..484)
             // ----------------------------------------------------------
-            fill_rr(rrect(pad, 182.0, pad + cw, 524.0, 12.0), rgb(27, 33, 44));
+            fill_rr(rrect(pad, 154.0, pad + cw, 484.0, 12.0), rgb(27, 33, 44));
             stroke_rr(
-                rrect(pad + 0.5, 182.5, pad + cw - 0.5, 523.5, 11.5),
+                rrect(pad + 0.5, 154.5, pad + cw - 0.5, 483.5, 11.5),
                 if snap.page_enabled { rgba(59, 130, 246, 0.55) } else { rgb(43, 52, 69) },
                 1.0,
             );
 
-            draw_text("文字页面调色", &self.fmt_section, rect(pad + 16.0, 194.0, 160.0, 220.0), rgb(238, 242, 248));
-            draw_text(
-                "仅调整 WPS 文字纸张与自动文字",
-                &self.fmt_small,
-                rect(pad + 114.0, 200.0, pad + cw - 76.0, 220.0),
-                rgb(122, 136, 158),
-            );
+            draw_text("文档页面护眼", &self.fmt_section, rect(pad + 16.0, 164.0, 160.0, 190.0), rgb(238, 242, 248));
+            let mut cx2 = pad + 114.0;
+            for (chip, w_chip, dim_in_m1) in [("文字", 38.0f32, false), ("表格", 38.0, false), ("PPT", 38.0, true)] {
+                let is_muted = active_dark_mode && dim_in_m1;
+                fill_rr(
+                    rrect(cx2, 168.0, cx2 + w_chip, 186.0, 6.0),
+                    if is_muted { rgb(28, 34, 46) } else { rgb(37, 45, 60) },
+                );
+                draw_text(
+                    chip,
+                    &self.fmt_small_center,
+                    rect(cx2, 168.0, cx2 + w_chip, 186.0),
+                    if is_muted { rgb(98, 110, 130) } else { rgb(174, 188, 210) },
+                );
+                cx2 += w_chip + 6.0;
+            }
 
-            // Pill Toggle Switch for Page
             self.draw_toggle(
                 &rt,
-                rect(pad + cw - 16.0 - 48.0, 196.0, pad + cw - 16.0, 222.0),
+                rect(pad + cw - 16.0 - 48.0, 165.0, pad + cw - 16.0, 191.0),
                 snap.page_enabled,
                 hovered == Some(ControlId::PageToggle),
             );
 
-            // Segmented polarity selector (y = 232..264)
+            // Segmented mode selector (y = 200..230)
             let seg_l = pad + 16.0;
             let seg_r = pad + cw - 16.0;
             let seg_mid = (seg_l + seg_r) * 0.5;
-            fill_rr(rrect(seg_l, 232.0, seg_r, 264.0, 9.0), rgb(18, 22, 30));
-            stroke_rr(rrect(seg_l + 0.5, 232.5, seg_r - 0.5, 263.5, 8.5), rgb(40, 48, 64), 1.0);
+            fill_rr(rrect(seg_l, 200.0, seg_r, 230.0, 9.0), rgb(18, 22, 30));
+            stroke_rr(rrect(seg_l + 0.5, 200.5, seg_r - 0.5, 229.5, 8.5), rgb(40, 48, 64), 1.0);
 
-            let dark_sel = live_adj.dark_mode;
+            let dark_sel = active_dark_mode;
             let active_seg_r = if dark_sel {
-                rrect(seg_l + 3.0, 235.0, seg_mid - 2.0, 261.0, 7.0)
+                rrect(seg_l + 3.0, 203.0, seg_mid - 2.0, 227.0, 7.0)
             } else {
-                rrect(seg_mid + 2.0, 235.0, seg_r - 3.0, 261.0, 7.0)
+                rrect(seg_mid + 2.0, 203.0, seg_r - 3.0, 227.0, 7.0)
             };
             fill_rr(active_seg_r, rgb(39, 67, 114));
             stroke_rr(active_seg_r, rgba(110, 178, 255, 0.5), 1.0);
 
             draw_text(
-                "护眼深底",
+                "模式 1 · 深底反色",
                 &self.fmt_btn,
-                rect(seg_l + 3.0, 235.0, seg_mid - 2.0, 261.0),
+                rect(seg_l + 3.0, 203.0, seg_mid - 2.0, 227.0),
                 if dark_sel { rgb(242, 247, 255) } else if hovered == Some(ControlId::ModeDark) { rgb(200, 212, 232) } else { rgb(138, 152, 174) },
             );
             draw_text(
-                "柔和浅底（兼容固定黑字）",
+                "模式 2 · 夜间柔暗（不反黑）",
                 &self.fmt_btn,
-                rect(seg_mid + 2.0, 235.0, seg_r - 3.0, 261.0),
+                rect(seg_mid + 2.0, 203.0, seg_r - 3.0, 227.0),
                 if !dark_sel { rgb(242, 247, 255) } else if hovered == Some(ControlId::ModeSoftLight) { rgb(200, 212, 232) } else { rgb(138, 152, 174) },
             );
 
-            // Live Dual-Line Readability Preview Box (y = 274..332)
-            let (p_bg, p_fg) = live_adj.palette();
-            let auto_cr = contrast_ratio(p_bg, p_fg);
-            let black_cr = contrast_ratio(p_bg, (0, 0, 0));
-            fill_rr(rrect(seg_l, 274.0, seg_r, 332.0, 10.0), rgb(p_bg.0, p_bg.1, p_bg.2));
-            stroke_rr(rrect(seg_l + 0.5, 274.5, seg_r - 0.5, 331.5, 9.5), rgba(255, 255, 255, 0.14), 1.0);
+            // Live Readability Preview Box (y = 238..292)
+            if dark_sel {
+                let (p_bg, p_fg) = live_adj.palette();
+                let auto_cr = contrast_ratio(p_bg, p_fg);
+                let black_cr = contrast_ratio(p_bg, (0, 0, 0));
+                fill_rr(rrect(seg_l, 238.0, seg_r, 292.0, 10.0), rgb(p_bg.0, p_bg.1, p_bg.2));
+                stroke_rr(rrect(seg_l + 0.5, 238.5, seg_r - 0.5, 291.5, 9.5), rgba(255, 255, 255, 0.14), 1.0);
+                draw_text(
+                    "Aa 123 · 文字/表格深底反色（独立参数）",
+                    &self.fmt_preview_lg,
+                    rect(seg_l + 12.0, 242.0, seg_r - 82.0, 266.0),
+                    rgb(p_fg.0, p_fg.1, p_fg.2),
+                );
+                draw_text(
+                    "Aa 123 · 固定纯黑字 (#000000) 对照",
+                    &self.fmt_preview_sm,
+                    rect(seg_l + 12.0, 267.0, seg_r - 134.0, 287.0),
+                    rgb(0, 0, 0),
+                );
+                fill_rr(rrect(seg_r - 74.0, 244.0, seg_r - 10.0, 262.0, 6.0), rgba(15, 20, 28, 0.72));
+                draw_text(&hex_color(p_bg), &self.fmt_small_center, rect(seg_r - 74.0, 244.0, seg_r - 10.0, 262.0), rgb(228, 236, 248));
 
-            draw_text(
-                "Aa 123 · 自动颜色文字（随滑块实时调色）",
-                &self.fmt_preview_lg,
-                rect(seg_l + 12.0, 280.0, seg_r - 82.0, 305.0),
-                rgb(p_fg.0, p_fg.1, p_fg.2),
-            );
-            draw_text(
-                "Aa 123 · 固定纯黑字 (#000000) 效果对照",
-                &self.fmt_preview_sm,
-                rect(seg_l + 12.0, 306.0, seg_r - 82.0, 327.0),
-                rgb(0, 0, 0),
-            );
+                fill_rr(rrect(seg_r - 126.0, 267.0, seg_r - 10.0, 286.0, 5.0), rgba(15, 20, 28, 0.68));
+                draw_text("PPT 仅模式 2 生效", &self.fmt_small_center, rect(seg_r - 126.0, 267.0, seg_r - 10.0, 286.0), rgb(188, 202, 224));
 
-            // Hex chip in top-right of preview
-            fill_rr(rrect(seg_r - 74.0, 282.0, seg_r - 10.0, 302.0, 6.0), rgba(15, 20, 28, 0.68));
-            draw_text(
-                &hex_color(p_bg),
-                &self.fmt_small_center,
-                rect(seg_r - 74.0, 282.0, seg_r - 10.0, 302.0),
-                rgb(228, 236, 248),
-            );
-
-            // Contrast readability summary line (y = 337..356)
-            let black_hint = if black_cr < 4.5 {
-                format!("固定黑字 {black_cr:.1}:1（深底偏暗，含黑字文档可切柔和浅底）")
+                let cr_line = format!(
+                    "自动字对比度 {auto_cr:.1}:1 ✓  ·  固定黑字 {black_cr:.1}:1 · 仅文字/表格生效，不调 PPT"
+                );
+                draw_text(&cr_line, &self.fmt_small, rect(seg_l + 2.0, 296.0, seg_r, 314.0), rgb(224, 180, 108));
             } else {
-                format!("固定黑字 {black_cr:.1}:1（清晰可读）")
-            };
-            let cr_line = format!("自动文字对比度 {auto_cr:.1}:1 ✓  ·  {black_hint}");
-            draw_text(
-                &cr_line,
-                &self.fmt_small,
-                rect(seg_l + 2.0, 337.0, seg_r, 356.0),
-                if black_cr < 4.5 { rgb(224, 180, 108) } else { rgb(120, 206, 152) },
-            );
+                let d_bg = live_adj.soft_dim_rgb();
+                let black_cr = contrast_ratio(d_bg, (0, 0, 0));
+                fill_rr(rrect(seg_l, 238.0, seg_r, 292.0, 10.0), rgb(d_bg.0, d_bg.1, d_bg.2));
+                stroke_rr(rrect(seg_l + 0.5, 238.5, seg_r - 0.5, 291.5, 9.5), rgba(255, 255, 255, 0.14), 1.0);
+                // Show sharp black text + dimmed PPT blue accent swatch!
+                let blue_dim = (
+                    ((158u32 * d_bg.0 as u32) / 255) as u8,
+                    ((197u32 * d_bg.1 as u32) / 255) as u8,
+                    ((232u32 * d_bg.2 as u32) / 255) as u8,
+                );
+                fill_rr(rrect(seg_r - 166.0, 266.0, seg_r - 10.0, 285.0, 5.0), rgb(blue_dim.0, blue_dim.1, blue_dim.2));
+                draw_text("PPT 模板色块保留原色", &self.fmt_small_center, rect(seg_r - 166.0, 266.0, seg_r - 10.0, 285.0), rgb(0, 0, 0));
+                draw_text(
+                    "Aa 123 · 文字/表格/PPT 柔暗（独立参数）",
+                    &self.fmt_preview_lg,
+                    rect(seg_l + 12.0, 242.0, seg_r - 82.0, 266.0),
+                    rgb(0, 0, 0),
+                );
+                draw_text(
+                    "纯白纸张柔和降亮，PPT 仅在此模式调节",
+                    &self.fmt_preview_sm,
+                    rect(seg_l + 12.0, 267.0, seg_r - 172.0, 287.0),
+                    rgb(24, 28, 34),
+                );
+                fill_rr(rrect(seg_r - 74.0, 244.0, seg_r - 10.0, 262.0, 6.0), rgba(15, 20, 28, 0.72));
+                draw_text(&hex_color(d_bg), &self.fmt_small_center, rect(seg_r - 74.0, 244.0, seg_r - 10.0, 262.0), rgb(228, 236, 248));
 
-            // 4 Silky Custom Direct2D Sliders (y = 362..478, stride 29)
+                let cr_line = format!(
+                    "黑字对比度 {black_cr:.1}:1 ✓  ·  文字 / 表格 / PPT 三端原生正片叠底，零闪屏"
+                );
+                draw_text(&cr_line, &self.fmt_small, rect(seg_l + 2.0, 296.0, seg_r, 314.0), rgb(120, 206, 152));
+            }
+
+            // 4 Silky Custom Direct2D Sliders (y = 319..431, stride 28)
             for i in 0..4 {
                 let sp = SLIDERS[i];
                 let val = slider_get(&live_adj, i);
-                let y0 = 362.0 + i as f32 * 29.0;
+                let y0 = 319.0 + i as f32 * 28.0;
                 let cy = y0 + 12.0;
                 let tr = self.layout.slider_tracks[i];
 
-                // Label
                 draw_text(sp.label, &self.fmt_body, rect(seg_l, y0, seg_l + 52.0, y0 + 24.0), rgb(206, 216, 232));
 
-                // Minus button
                 let m_box = rect(seg_l + 54.0, y0 + 1.0, seg_l + 78.0, y0 + 23.0);
                 let m_hov = hovered == Some(ControlId::SliderMinus(i));
                 fill_rr(rrect(m_box.left, m_box.top, m_box.right, m_box.bottom, 6.0), if m_hov { rgb(52, 63, 82) } else { rgb(36, 44, 58) });
                 draw_text("−", &self.fmt_btn, m_box, rgb(216, 224, 238));
 
-                // Slider Track
                 let frac = ((val - sp.min) as f32 / (sp.max - sp.min) as f32).clamp(0.0, 1.0);
                 let thumb_x = tr.left + frac * (tr.right - tr.left);
                 fill_rr(rrect(tr.left, cy - 3.0, tr.right, cy + 3.0, 3.0), rgb(44, 54, 72));
                 if thumb_x > tr.left + 2.0 {
                     let fill_col = match i {
-                        2 => rgb(214, 152, 74), // warm sepia track accent
-                        3 => rgb(156, 168, 186), // cool silver grayscale track accent
-                        _ => rgb(64, 144, 252), // sapphire blue accent
+                        2 => rgb(214, 152, 74),
+                        3 => rgb(156, 168, 186),
+                        _ => rgb(64, 144, 252),
                     };
                     fill_rr(rrect(tr.left, cy - 3.0, thumb_x, cy + 3.0, 3.0), fill_col);
                 }
 
-                // Thumb with subtle outer halo on hover/drag
                 let active_t = dragging == Some(i) || hovered == Some(ControlId::SliderTrack(i));
                 if active_t {
                     if let Some(b_glow) = brush(rgba(84, 158, 255, 0.28)) {
@@ -600,13 +648,11 @@ impl D2dRenderer {
                     rt.DrawEllipse(&ellipse(thumb_x, cy, 6.8, 6.8), &b_rim, 1.4, None);
                 }
 
-                // Plus button
                 let p_box = rect(tr.right + 12.0, y0 + 1.0, tr.right + 36.0, y0 + 23.0);
                 let p_hov = hovered == Some(ControlId::SliderPlus(i));
                 fill_rr(rrect(p_box.left, p_box.top, p_box.right, p_box.bottom, 6.0), if p_hov { rgb(52, 63, 82) } else { rgb(36, 44, 58) });
                 draw_text("+", &self.fmt_btn, p_box, rgb(216, 224, 238));
 
-                // Value readout
                 let v_str = if sp.is_offset_100 {
                     let d = val - 100;
                     if d == 0 { "0%".into() } else { format!("{d:+}%") }
@@ -620,63 +666,140 @@ impl D2dRenderer {
             draw_text(
                 &snap.page_msg,
                 &self.fmt_small,
-                rect(seg_l, 486.0, seg_r - 86.0, 518.0),
+                rect(seg_l, 442.0, seg_r - 92.0, 476.0),
                 rgb(130, 144, 166),
             );
-            let rst = rect(seg_r - 78.0, 486.0, seg_r, 512.0);
+            let rst = rect(seg_r - 84.0, 444.0, seg_r, 470.0);
             let rst_hov = hovered == Some(ControlId::ResetParams);
             fill_rr(rrect(rst.left, rst.top, rst.right, rst.bottom, 7.0), if rst_hov { rgb(48, 58, 76) } else { rgb(35, 43, 58) });
             stroke_rr(rrect(rst.left + 0.5, rst.top + 0.5, rst.right - 0.5, rst.bottom - 0.5, 6.5), rgb(56, 68, 90), 1.0);
-            draw_text("重置参数", &self.fmt_small_center, rst, rgb(210, 220, 236));
+            let rst_label = if dark_sel { "重置模式 1" } else { "重置模式 2" };
+            draw_text(rst_label, &self.fmt_small_center, rst, rgb(210, 220, 236));
 
             // ----------------------------------------------------------
-            // 4. Card 3: Auto-Start on Boot (y = 534..596)
+            // 4. Card 3: Dedicated Document Image Night-Brightness Bar (y = 492..580)
             // ----------------------------------------------------------
-            fill_rr(rrect(pad, 534.0, pad + cw, 596.0, 12.0), rgb(27, 33, 44));
+            fill_rr(rrect(pad, 492.0, pad + cw, 580.0, 12.0), rgb(27, 33, 44));
             stroke_rr(
-                rrect(pad + 0.5, 534.5, pad + cw - 0.5, 595.5, 11.5),
+                rrect(pad + 0.5, 492.5, pad + cw - 0.5, 579.5, 11.5),
+                if snap.img_enabled { rgba(245, 180, 82, 0.55) } else { rgb(43, 52, 69) },
+                1.0,
+            );
+            draw_text("贴图夜间亮度", &self.fmt_section, rect(pad + 16.0, 501.0, 160.0, 527.0), rgb(238, 242, 248));
+            let mut cx3 = pad + 114.0;
+            for (chip, w_chip) in [("文字", 38.0f32), ("PPT", 38.0), ("表格", 38.0)] {
+                fill_rr(rrect(cx3, 505.0, cx3 + w_chip, 523.0, 6.0), rgb(37, 45, 60));
+                draw_text(chip, &self.fmt_small_center, rect(cx3, 505.0, cx3 + w_chip, 523.0), rgb(174, 188, 210));
+                cx3 += w_chip + 6.0;
+            }
+            self.draw_toggle(
+                &rt,
+                rect(pad + cw - 16.0 - 48.0, 502.0, pad + cw - 16.0, 528.0),
+                snap.img_enabled,
+                hovered == Some(ControlId::ImgToggle),
+            );
+
+            // Dedicated Image Brightness Slider (y = 532..556)
+            {
+                let y0 = 532.0;
+                let cy = y0 + 12.0;
+                let tr = self.layout.img_track;
+                let val = live_img_brightness.clamp(IMG_MIN, IMG_MAX);
+
+                draw_text("图片亮度", &self.fmt_body, rect(seg_l, y0, seg_l + 52.0, y0 + 24.0), rgb(206, 216, 232));
+
+                let m_box = rect(seg_l + 54.0, y0 + 1.0, seg_l + 78.0, y0 + 23.0);
+                let m_hov = hovered == Some(ControlId::ImgMinus);
+                fill_rr(rrect(m_box.left, m_box.top, m_box.right, m_box.bottom, 6.0), if m_hov { rgb(52, 63, 82) } else { rgb(36, 44, 58) });
+                draw_text("−", &self.fmt_btn, m_box, rgb(216, 224, 238));
+
+                let frac = ((val - IMG_MIN) as f32 / (IMG_MAX - IMG_MIN) as f32).clamp(0.0, 1.0);
+                let thumb_x = tr.left + frac * (tr.right - tr.left);
+                fill_rr(rrect(tr.left, cy - 3.0, tr.right, cy + 3.0, 3.0), rgb(44, 54, 72));
+                if thumb_x > tr.left + 2.0 {
+                    fill_rr(rrect(tr.left, cy - 3.0, thumb_x, cy + 3.0, 3.0), rgb(242, 178, 76));
+                }
+
+                let active_t = dragging_img || hovered == Some(ControlId::ImgTrack);
+                if active_t {
+                    if let Some(b_glow) = brush(rgba(245, 185, 86, 0.30)) {
+                        rt.FillEllipse(&ellipse(thumb_x, cy, 10.5, 10.5), &b_glow);
+                    }
+                }
+                if let Some(b_thumb) = brush(rgb(255, 248, 236)) {
+                    rt.FillEllipse(&ellipse(thumb_x, cy, 6.8, 6.8), &b_thumb);
+                }
+                if let Some(b_rim) = brush(rgb(236, 166, 62)) {
+                    rt.DrawEllipse(&ellipse(thumb_x, cy, 6.8, 6.8), &b_rim, 1.4, None);
+                }
+
+                let p_box = rect(tr.right + 12.0, y0 + 1.0, tr.right + 36.0, y0 + 23.0);
+                let p_hov = hovered == Some(ControlId::ImgPlus);
+                fill_rr(rrect(p_box.left, p_box.top, p_box.right, p_box.bottom, 6.0), if p_hov { rgb(52, 63, 82) } else { rgb(36, 44, 58) });
+                draw_text("+", &self.fmt_btn, p_box, rgb(216, 224, 238));
+
+                let v_str = format!("{val}%");
+                draw_text(&v_str, &self.fmt_val, rect(p_box.right + 4.0, y0, seg_r, y0 + 24.0), rgb(245, 194, 106));
+            }
+            draw_text(
+                "仅独立压暗文档内贴入的图片（保留 PNG 透明通道），不影响正文、工具栏与原文件",
+                &self.fmt_small,
+                rect(pad + 16.0, 558.0, pad + cw - 16.0, 576.0),
+                if snap.img_enabled { rgb(232, 194, 132) } else { rgb(134, 147, 168) },
+            );
+
+            // ----------------------------------------------------------
+            // 5. Card 4: Auto-Start on Boot (y = 588..648)
+            // ----------------------------------------------------------
+            fill_rr(rrect(pad, 588.0, pad + cw, 648.0, 12.0), rgb(27, 33, 44));
+            stroke_rr(
+                rrect(pad + 0.5, 588.5, pad + cw - 0.5, 647.5, 11.5),
                 if autostart.enabled { rgba(59, 130, 246, 0.55) } else { rgb(43, 52, 69) },
                 1.0,
             );
-            draw_text("开机静默自启", &self.fmt_section, rect(pad + 16.0, 543.0, 175.0, 565.0), rgb(238, 242, 248));
-            fill_rr(rrect(pad + 114.0, 546.0, pad + 174.0, 564.0, 6.0), rgb(37, 45, 60));
-            draw_text("托盘常驻", &self.fmt_small_center, rect(pad + 114.0, 546.0, pad + 174.0, 564.0), rgb(174, 188, 210));
+            draw_text("开机静默自启", &self.fmt_section, rect(pad + 16.0, 597.0, 175.0, 619.0), rgb(238, 242, 248));
+            fill_rr(rrect(pad + 114.0, 600.0, pad + 174.0, 618.0, 6.0), rgb(37, 45, 60));
+            draw_text("托盘常驻", &self.fmt_small_center, rect(pad + 114.0, 600.0, pad + 174.0, 618.0), rgb(174, 188, 210));
 
             let auto_sub = if autostart.enabled {
-                match (snap.remember_skin, snap.remember_page) {
-                    (true, true) => "已启用 · 登录后静默驻留托盘，自动开启深色外观 + 页面调色",
-                    (true, false) => "已启用 · 登录后静默驻留托盘，自动开启原生深色外观",
-                    (false, true) => "已启用 · 登录后静默驻留托盘，自动开启文字页面调色",
-                    (false, false) => "已启用 · 登录后静默驻留托盘，待机等待一键切换",
+                match (snap.remember_skin, snap.remember_page, snap.remember_img) {
+                    (true, true, true) => "已启用 · 开机托盘静默运行，自动开启外观 + 页面 + 贴图降亮",
+                    (true, true, false) => "已启用 · 登录后静默驻留托盘，自动开启深色外观 + 页面护眼",
+                    (true, false, true) => "已启用 · 登录后静默驻留托盘，自动开启深色外观 + 贴图降亮",
+                    (true, false, false) => "已启用 · 登录后静默驻留托盘，自动开启原生深色外观",
+                    (false, true, true) => "已启用 · 登录后静默驻留托盘，自动开启页面护眼 + 贴图降亮",
+                    (false, true, false) => "已启用 · 登录后静默驻留托盘，自动开启文档页面护眼",
+                    (false, false, true) => "已启用 · 登录后静默驻留托盘，自动开启贴图夜间亮度",
+                    (false, false, false) => "已启用 · 登录后静默驻留托盘，待机等待一键切换",
                 }
             } else if autostart.disabled_by_taskmgr {
                 "已被任务管理器禁用 · 重新开启将恢复当前程序自启"
             } else if autostart.registered_elsewhere {
                 "启动项指向旧路径 · 开启将更新为当前 EXE 路径"
             } else {
-                "登录 Windows 静默驻留托盘，自动延续上次深色/调色开关"
+                "登录 Windows 静默驻留托盘，自动延续上次开关状态"
             };
             draw_text(
                 auto_sub,
                 &self.fmt_small,
-                rect(pad + 16.0, 569.0, pad + cw - 72.0, 591.0),
+                rect(pad + 16.0, 622.0, pad + cw - 72.0, 644.0),
                 if autostart.enabled { rgb(156, 198, 248) } else { rgb(138, 151, 172) },
             );
 
             self.draw_toggle(
                 &rt,
-                rect(pad + cw - 16.0 - 48.0, 552.0, pad + cw - 16.0, 578.0),
+                rect(pad + cw - 16.0 - 48.0, 605.0, pad + cw - 16.0, 631.0),
                 autostart.enabled,
                 hovered == Some(ControlId::AutoStartToggle),
             );
 
             // ----------------------------------------------------------
-            // 5. Footer Bar (y = 608..642)
+            // 6. Footer Bar (y = 658..692)
             // ----------------------------------------------------------
             draw_text(
                 "点关闭 × 自动收至托盘并保持深色生效\n右键托盘图标可随时开关或恢复并退出",
                 &self.fmt_small,
-                rect(pad + 2.0, 608.0, LOGICAL_W - pad - 204.0, 646.0),
+                rect(pad + 2.0, 658.0, LOGICAL_W - pad - 204.0, 696.0),
                 rgb(122, 136, 158),
             );
 
@@ -685,15 +808,13 @@ impl D2dRenderer {
             let rest_r = hide_l - 10.0;
             let rest_l = rest_r - 92.0;
 
-            // Restore All button
-            let rb = rect(rest_l, 608.0, rest_r, 642.0);
+            let rb = rect(rest_l, 658.0, rest_r, 692.0);
             let rb_hov = hovered == Some(ControlId::RestoreAll);
             fill_rr(rrect(rb.left, rb.top, rb.right, rb.bottom, 9.0), if rb_hov { rgb(52, 62, 80) } else { rgb(34, 42, 56) });
             stroke_rr(rrect(rb.left + 0.5, rb.top + 0.5, rb.right - 0.5, rb.bottom - 0.5, 8.5), rgb(64, 78, 102), 1.0);
             draw_text("全部恢复", &self.fmt_btn, rb, rgb(224, 232, 245));
 
-            // Minimize to Tray button (accent)
-            let hb = rect(hide_l, 608.0, hide_r, 642.0);
+            let hb = rect(hide_l, 658.0, hide_r, 692.0);
             let hb_hov = hovered == Some(ControlId::HideToTray);
             fill_rr(rrect(hb.left, hb.top, hb.right, hb.bottom, 9.0), if hb_hov { rgb(74, 148, 255) } else { rgb(50, 122, 235) });
             draw_text("收至托盘", &self.fmt_btn, hb, rgb(255, 255, 255));

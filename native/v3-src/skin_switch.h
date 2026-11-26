@@ -7,6 +7,42 @@ using SwitchTemp2 = void (__thiscall*)(void*, const QString*, const QString*);
 using GetStrFn = QString* (__thiscall*)(void*, QString*);
 using IsDarkFn = bool (__thiscall*)(void*);
 using AddSearchPathFn = void (__thiscall*)(void*, const QString*);
+using ApplyFundamentalFn = bool (__thiscall*)(void*, void*, bool, const QString*);
+using ResetFundamentalFn = bool (__thiscall*)(void*, void*);
+using ClearFundamentalFn = bool (__thiscall*)(void*, void*);
+
+static void refreshOpenDialogs(HMODULE shellDll, void* appSkin, bool toDark) {
+    HMODULE qwid = GetModuleHandleW(L"Qt5WidgetsKso.dll");
+    if (!qwid || !shellDll || !appSkin) return;
+    auto topWidgets = (AllWidgets)GetProcAddress(qwid, "?topLevelWidgets@QApplication@kso_qt@@SA?AV?$QList@PAVQWidget@kso_qt@@@2@XZ");
+    auto updateWid  = (NoArg)GetProcAddress(qwid, "?update@QWidget@kso_qt@@QAEXXZ");
+    auto applyFund  = (ApplyFundamentalFn)GetProcAddress(shellDll, "?applyFundamentalStyleHint@KAppSkin@@QAE_NPAVQWidget@kso_qt@@_NABVQString@3@@Z");
+    auto resetFund  = (ResetFundamentalFn)GetProcAddress(shellDll, "?resetFundamentalStyleHint@KAppSkin@@QAE_NPAVQWidget@kso_qt@@@Z");
+    auto clearFund  = (ClearFundamentalFn)GetProcAddress(shellDll, "?clearFundamentalStyleHint@KAppSkin@@QAE_NPAVQWidget@kso_qt@@@Z");
+    if (!topWidgets) return;
+
+    QStringList tops = {nullptr};
+    topWidgets(&tops);
+    if (tops.d) {
+        QString empty = qstr("");
+        for (int i = tops.d->begin; i < tops.d->end; i++) {
+            void* w = tops.d->array[i];
+            if (!w) continue;
+            void* dlg = ((CastGet)(*(void***)w)[1])(w, "QDialog");
+            if (!dlg) continue;
+            if (toDark) {
+                if (applyFund) applyFund(appSkin, w, true, &empty);
+                if (resetFund) resetFund(appSkin, w);
+            } else {
+                if (clearFund) clearFund(appSkin, w);
+                if (resetFund) resetFund(appSkin, w);
+            }
+            if (updateWid) updateWid(w);
+        }
+        api.destroy(&empty);
+        blue::releaseWidgets(tops);
+    }
+}
 
 static bool apply(Request* req) {
     HMODULE promeDll = GetModuleHandleW(L"kprometheus.dll");
@@ -82,6 +118,10 @@ static bool apply(Request* req) {
         if (updateUi) {
             updateUi(app);
         }
+
+        // Synchronize already-open QDialogs (Find/Replace, Format Cells, Page Setup, etc.)
+        // with WPS's native KFundamentalDialog engine on both dark switch and light restore.
+        refreshOpenDialogs(shellDll, appSkin, searchDir[0] != 0);
 
         // When restoring back to built-in skin (searchDir empty), re-enable WPS's native sync cleanly.
         if (!searchDir[0] && addGlobalSync) {

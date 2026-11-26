@@ -17,7 +17,7 @@ use std::time::UNIX_EPOCH;
 
 pub const DARK_SKIN_NAME: &str = "2018white_dark";
 pub const LIGHT_SKIN_FALLBACK: &str = "2018white";
-const BUILDER_VERSION: u32 = 3;
+const BUILDER_VERSION: u32 = 5;
 
 const SKIN_INI: &str = "[common]\r\nxmlFile=ongmani\r\nstyle=KWPSStyle_2018\r\nrccFile=prometheus_kso_res.rcc\r\nbaseSkin=2018white\r\n\r\n[wpsoffice]\r\nstyle=KPromeStyle\r\nrccFile=prometheus_wpsoffice_res.rcc\r\n";
 
@@ -317,7 +317,10 @@ struct KuipState {
     skip_style: bool,
     is_icon_style: bool,
     in_style_tp_widget: bool,
-    seen_tp_keys: Vec<String>,
+    in_et_edit_bar: bool,
+    in_et_formula_bar: bool,
+    in_fundamental_preview: bool,
+    seen_style_keys: Vec<String>,
 }
 
 impl KuipState {
@@ -326,7 +329,10 @@ impl KuipState {
         self.skip_style = false;
         self.is_icon_style = false;
         self.in_style_tp_widget = false;
-        self.seen_tp_keys.clear();
+        self.in_et_edit_bar = false;
+        self.in_et_formula_bar = false;
+        self.in_fundamental_preview = false;
+        self.seen_style_keys.clear();
     }
 
     fn rewrite_tag(&mut self, e: &BytesStart, is_empty: bool, mode: KuipMode) -> Result<Event<'static>, String> {
@@ -361,7 +367,10 @@ impl KuipState {
             self.skip_style = lo.contains("bluescreen") || lo.contains("paper");
             self.is_icon_style = cls.contains("IconColor") || cls.ends_with("_Icon");
             self.in_style_tp_widget = cls == "KxTpStyleFormatWidget";
-            self.seen_tp_keys.clear();
+            self.in_et_edit_bar = cls == "EtEditBarWidget";
+            self.in_et_formula_bar = cls == "KxEtFormulaBar";
+            self.in_fundamental_preview = cls == "KFundamentalPreview";
+            self.seen_style_keys.clear();
         } else {
             match mode {
                 KuipMode::Palette => {
@@ -398,11 +407,18 @@ impl KuipState {
                     if tag == "color" && !self.skip_style {
                         let name = get_attr(&attrs, "name");
                         let val = get_attr(&attrs, "value");
+                        if !name.is_empty()
+                            && (self.in_style_tp_widget
+                                || self.in_et_edit_bar
+                                || self.in_et_formula_bar
+                                || self.in_fundamental_preview)
+                        {
+                            self.seen_style_keys.push(name.clone());
+                        }
                         if !val.is_empty() {
                             if self.cur_style_cls == "KxWpsStyleGallery" && name == "item-background" {
                                 set_attr(&mut attrs, "value", "#B8C0CC".to_string());
                             } else if self.in_style_tp_widget {
-                                self.seen_tp_keys.push(name.clone());
                                 let mapped = match name.as_str() {
                                     "panel_background" | "blockBackground" | "editor_background" => {
                                         Some("#B8C0CC")
@@ -452,7 +468,234 @@ impl KuipState {
     }
 }
 
-fn transform_kuip(src: &Path, dst: &Path, mode: KuipMode) -> Result<(), String> {
+/// Native WPS `KFundamentalDialog` + companion control styles injected into
+/// `prometheuscommon.kuip` / `ongmanicommon.kuip` so WPS's built-in
+/// `KAppSkin::applyFundamentalStyleHint` / `assignFundamentalPalette` /
+/// `KFundamentalDialogTitle` / `KWPSStyle_2018` render all dialogs (Find/Replace,
+/// Format Cells, Page Setup, Font, Paragraph, etc.) natively in dark mode, and
+/// automatically revert to light when switching back to `2018white`.
+const FUNDAMENTAL_DIALOG_STYLES: &str = r##"
+<style class="KFundamentalDialog">
+  <hint name="fundamentalCustomTitle" value="1"/>
+  <color name="Caption" value="#22262C"/>
+  <color name="CaptionText" value="#ECF0F6"/>
+  <color name="CaptionText-disable" value="#7A8496"/>
+  <color name="Window" value="#252930"/>
+  <color name="WindowText" value="#ECF0F6"/>
+  <color name="WindowText-disable" value="#6B7587"/>
+  <color name="Base" value="#1E2228"/>
+  <color name="AlternateBase" value="#262B33"/>
+  <color name="AlternateBase-disable" value="#23272E"/>
+  <color name="Text" value="#ECF0F6"/>
+  <color name="Text-disable" value="#6B7587"/>
+  <color name="Button" value="#303641"/>
+  <color name="ButtonText" value="#ECF0F6"/>
+  <color name="ToolTipBase" value="#2B3038"/>
+  <color name="ToolTipText" value="#ECF0F6"/>
+  <color name="Highlight" value="#2E5A9E"/>
+  <color name="Highlight-disable" value="#353D4B"/>
+  <color name="HighlightedText" value="#FFFFFF"/>
+  <color name="HighlightedText-disable" value="#9AA4B6"/>
+  <color name="Light" value="#434B59"/>
+  <color name="Midlight" value="#373E4A"/>
+  <color name="Dark" value="#1A1D22"/>
+  <color name="Mid" value="#2C313A"/>
+  <color name="Shadow" value="#14171B"/>
+  <color name="Link" value="#70ACFF"/>
+  <color name="LinkVisited" value="#9B8CFF"/>
+  <color name="background" value="#252930"/>
+  <color name="background-color" value="#252930"/>
+  <color name="border" value="#444B57"/>
+  <color name="border-color" value="#444B57"/>
+  <color name="slider-bg-color" value="#2B3038"/>
+  <color name="popup-border-color" value="#4B5362"/>
+  <color name="border-color-on-popup" value="#528BFF"/>
+</style>
+<style class="QPushButton">
+  <color name="background" value="#303641"/>
+  <color name="background-hover" value="#3B4250"/>
+  <color name="background-down" value="#262B34"/>
+  <color name="background-selected" value="#3B4250"/>
+  <color name="background-disable" value="#282C34"/>
+  <color name="border" value="#4A5261"/>
+  <color name="border-hover" value="#626C80"/>
+  <color name="border-down" value="#528BFF"/>
+  <color name="border-disable" value="#363C47"/>
+  <color name="text" value="#ECF0F6"/>
+  <color name="text-disable" value="#6B7587"/>
+  <hint name="borderRadius" value="4"/>
+  <hint name="borderWidth" value="1"/>
+  <hint name="RenderHints" value="1"/>
+</style>
+<style class="QPushButton-default">
+  <color name="background" value="#263B5E"/>
+  <color name="background-hover" value="#304B78"/>
+  <color name="background-down" value="#203252"/>
+  <color name="background-selected" value="#304B78"/>
+  <color name="background-disable" value="#282C34"/>
+  <color name="border" value="#528BFF"/>
+  <color name="border-hover" value="#70A3FF"/>
+  <color name="border-down" value="#427AE0"/>
+  <color name="border-disable" value="#363C47"/>
+  <color name="text" value="#F2F6FF"/>
+  <color name="text-disable" value="#6B7587"/>
+  <hint name="borderRadius" value="4"/>
+  <hint name="borderWidth" value="1"/>
+  <hint name="RenderHints" value="1"/>
+</style>
+<style class="QTabBar">
+  <color name="background" value="#20242A"/>
+  <color name="background-hover" value="#2D333E"/>
+  <color name="background-down" value="#2F3643"/>
+  <color name="background-selected" value="#323946"/>
+  <color name="background-disable" value="#1E2228"/>
+  <color name="border" value="#3B4250"/>
+  <color name="tab-border" value="#475061"/>
+  <color name="text" value="#9AA4B6"/>
+  <color name="text-hover" value="#ECF0F6"/>
+  <color name="text-selected" value="#7CB4FF"/>
+  <color name="text-disable" value="#616B7C"/>
+  <hint name="borderRadius" value="3"/>
+  <hint name="borderWidth" value="1"/>
+  <hint name="RenderHints" value="1"/>
+</style>
+<style class="QLineEdit">
+  <color name="background" value="#1E2228"/>
+  <color name="background-hover" value="#21252C"/>
+  <color name="background-down" value="#1E2228"/>
+  <color name="background-focus" value="#1E2228"/>
+  <color name="background-disable" value="#24282F"/>
+  <color name="border" value="#444B57"/>
+  <color name="border-hover" value="#5D6778"/>
+  <color name="border-down" value="#528BFF"/>
+  <color name="border-focus" value="#528BFF"/>
+  <color name="border-disable" value="#353B45"/>
+  <color name="text" value="#ECF0F6"/>
+  <color name="text-disable" value="#6B7587"/>
+  <hint name="radius" value="3"/>
+  <hint name="borderRadius" value="3"/>
+  <hint name="borderWidth" value="1"/>
+  <hint name="RenderHints" value="1"/>
+</style>
+<style base="KComboBoxBase" class="QComboBox">
+  <color name="background" value="#1E2228"/>
+  <color name="background-hover" value="#252A32"/>
+  <color name="background-down" value="#2B313B"/>
+  <color name="background-disable" value="#24282F"/>
+  <linearGradient end="0,1" name="background" spread="pad" start="0,0">
+    <color position="0" value="#1E2228"/>
+    <color position="1" value="#1E2228"/>
+  </linearGradient>
+  <linearGradient end="0,1" name="background-disable" spread="pad" start="0,0">
+    <color position="0" value="#24282F"/>
+    <color position="1" value="#24282F"/>
+  </linearGradient>
+  <linearGradient end="0,1" name="background-hover-box" spread="pad" start="0,0">
+    <color position="0" value="#232830"/>
+    <color position="1" value="#232830"/>
+  </linearGradient>
+  <linearGradient end="0,1" name="background-hover-arraw" spread="pad" start="0,0">
+    <color position="0" value="#323946"/>
+    <color position="1" value="#323946"/>
+  </linearGradient>
+  <linearGradient end="0,1" name="background-down" spread="pad" start="0,0">
+    <color position="0" value="#2B313B"/>
+    <color position="1" value="#2B313B"/>
+  </linearGradient>
+  <linearGradient end="0,1" name="background-down-arraw" spread="pad" start="0,0">
+    <color position="0" value="#3A4252"/>
+    <color position="1" value="#3A4252"/>
+  </linearGradient>
+  <color name="border" value="#444B57"/>
+  <color name="border-hover" value="#5D6778"/>
+  <color name="border-down" value="#528BFF"/>
+  <color name="border-disable" value="#353B45"/>
+  <color name="editor-text" value="#ECF0F6"/>
+  <color name="text" value="#ECF0F6"/>
+  <color name="text-disabled" value="#6B7587"/>
+  <color name="text-disable" value="#6B7587"/>
+  <color name="arrow" value="#B4BECD"/>
+  <color name="handler-highlight" value="#2E5A9E"/>
+  <color name="list-background" value="#24282F"/>
+  <color name="list-text" value="#ECF0F6"/>
+  <color name="list-text-disable" value="#6B7587"/>
+  <color name="list-text-highlight" value="#FFFFFF"/>
+  <color name="list-border" value="#444B57"/>
+  <color name="popup-border-color" value="#444B57"/>
+  <color name="border-color-on-popup" value="#528BFF"/>
+  <color name="slider-bg-color" value="#2B3038"/>
+  <hint name="borderRadius" value="3"/>
+  <hint name="borderWidth" value="1"/>
+  <hint name="RenderHints" value="1"/>
+</style>
+<style class="KSpinBox">
+  <color name="background" value="#1E2228"/>
+  <color name="background-hover" value="#252A32"/>
+  <color name="background-down" value="#2B313B"/>
+  <color name="background-disable" value="#24282F"/>
+  <color name="border" value="#444B57"/>
+  <color name="border-hover" value="#5D6778"/>
+  <color name="border-down" value="#528BFF"/>
+  <color name="border-disable" value="#353B45"/>
+  <color name="text" value="#ECF0F6"/>
+  <color name="text-disable" value="#6B7587"/>
+  <hint name="borderRadius" value="3"/>
+  <hint name="borderWidth" value="1"/>
+</style>
+<style class="FrameGroupBox">
+  <color name="border" value="#3F4654"/>
+  <color name="background" value="#252930"/>
+</style>
+<style class="FrameTabWidget">
+  <color name="border" value="#3F4654"/>
+  <color name="background" value="#252930"/>
+</style>
+<style class="HeaderSection">
+  <color name="background" value="#2B3038"/>
+  <color name="border" value="#3F4654"/>
+  <color name="text" value="#D5DBE5"/>
+</style>
+<style class="HeaderSection-active">
+  <color name="background" value="#343B46"/>
+  <color name="border" value="#4E5666"/>
+  <color name="text" value="#ECF0F6"/>
+</style>
+<style class="HeaderEmptyArea">
+  <color name="background" value="#23272E"/>
+  <color name="border" value="#393F4A"/>
+</style>
+<style class="IndicatorBranch">
+  <color name="background" value="#1E2228"/>
+  <color name="border" value="#444B57"/>
+</style>
+<style class="KToolButton-dialog">
+  <color name="background" value="#00000000"/>
+  <color name="background-hover" value="#FFFFFF1C"/>
+  <color name="background-down" value="#FFFFFF2E"/>
+  <color name="border" value="#00000000"/>
+  <color name="text" value="#ECF0F6"/>
+  <hint name="borderRadius" value="4"/>
+  <hint name="borderWidth" value="0"/>
+</style>
+"##;
+
+fn inject_missing_colors(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    seen: &[String],
+    extras: &[(&str, &str)],
+) -> Result<(), String> {
+    for &(k, v) in extras {
+        if !seen.iter().any(|x| x == k) {
+            let mut c = BytesStart::new("color");
+            c.push_attribute(("name", k));
+            c.push_attribute(("value", v));
+            writer.write_event(Event::Empty(c)).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+fn transform_kuip(src: &Path, dst: &Path, mode: KuipMode, inject_fundamental_dialogs: bool) -> Result<(), String> {
     let raw = fs::read_to_string(src).map_err(|e| format!("读取 {} 失败: {e}", src.display()))?;
     let mut reader = Reader::from_str(&raw);
     let mut writer = Writer::new(Cursor::new(Vec::new()));
@@ -464,6 +707,24 @@ fn transform_kuip(src: &Path, dst: &Path, mode: KuipMode) -> Result<(), String> 
         ("editor_background", "#B8C0CC"),
         ("blockBackground-hover", "#A8B3C2"),
         ("blockBackground-down", "#9AA7B8"),
+    ];
+    // KWPSStyle_2018 queries getColor("EtEditBarWidget", "background") (NOT getGradient!)
+    // and falls back to Qt::white if missing! Provide explicit <color> entries.
+    let et_edit_bar_extras = [
+        ("background", "CommonThemePalette::kd-color-fill-base"),
+        ("background-disable", "CommonThemePalette::kd-color-fill-light"),
+        ("border", "CommonPalette::ctl-border-01"),
+        ("editting-border", "CommonThemePalette::kd-color-text-public"),
+    ];
+    let et_formula_bar_extras = [
+        ("background", "CommonPalette::background-02"),
+        ("background-disable", "CommonThemePalette::kd-color-fill-light"),
+        ("background-start", "CommonPalette::background-02"),
+    ];
+    let fundamental_preview_extras = [
+        ("Background", "#292E36"),
+        ("ContentLight", "#323842"),
+        ("Text", "#ECF0F6"),
     ];
 
     loop {
@@ -478,12 +739,7 @@ fn transform_kuip(src: &Path, dst: &Path, mode: KuipMode) -> Result<(), String> 
                 if matches!(mode, KuipMode::Generic) && tag == "style" && st.in_style_tp_widget {
                     if let Event::Empty(bs) = ev {
                         writer.write_event(Event::Start(bs)).map_err(|e| e.to_string())?;
-                        for (k, v) in tp_extras {
-                            let mut c = BytesStart::new("color");
-                            c.push_attribute(("name", k));
-                            c.push_attribute(("value", v));
-                            writer.write_event(Event::Empty(c)).map_err(|e| e.to_string())?;
-                        }
+                        inject_missing_colors(&mut writer, &[], &tp_extras)?;
                         writer
                             .write_event(Event::End(BytesEnd::new("style")))
                             .map_err(|e| e.to_string())?;
@@ -498,17 +754,23 @@ fn transform_kuip(src: &Path, dst: &Path, mode: KuipMode) -> Result<(), String> 
             }
             Ok(Event::End(e)) => {
                 if e.name().as_ref() == b"style" {
-                    if matches!(mode, KuipMode::Generic) && st.in_style_tp_widget {
-                        for (k, v) in tp_extras {
-                            if !st.seen_tp_keys.iter().any(|x| x == k) {
-                                let mut c = BytesStart::new("color");
-                                c.push_attribute(("name", k));
-                                c.push_attribute(("value", v));
-                                writer.write_event(Event::Empty(c)).map_err(|e| e.to_string())?;
-                            }
+                    if matches!(mode, KuipMode::Generic) {
+                        if st.in_style_tp_widget {
+                            inject_missing_colors(&mut writer, &st.seen_style_keys, &tp_extras)?;
+                        } else if st.in_et_edit_bar {
+                            inject_missing_colors(&mut writer, &st.seen_style_keys, &et_edit_bar_extras)?;
+                        } else if st.in_et_formula_bar {
+                            inject_missing_colors(&mut writer, &st.seen_style_keys, &et_formula_bar_extras)?;
+                        } else if st.in_fundamental_preview {
+                            inject_missing_colors(&mut writer, &st.seen_style_keys, &fundamental_preview_extras)?;
                         }
                     }
                     st.reset_style();
+                } else if e.name().as_ref() == b"theme" && inject_fundamental_dialogs {
+                    writer
+                        .get_mut()
+                        .write_all(FUNDAMENTAL_DIALOG_STYLES.as_bytes())
+                        .map_err(|e| e.to_string())?;
                 }
                 writer.write_event(Event::End(e.into_owned())).map_err(|e| e.to_string())?;
             }
@@ -788,13 +1050,14 @@ pub fn ensure_dark_skin(office6_dir: &Path, cache_root: &Path) -> Result<(String
         let name = p.file_name().unwrap().to_string_lossy().into_owned();
         let out = stage_dir.join(&name);
         if name == "palette.kuip" || name.starts_with("palette-") {
-            transform_kuip(&p, &out, KuipMode::Palette)?;
+            transform_kuip(&p, &out, KuipMode::Palette, false)?;
         } else if name == "theme-palette.kuip" {
-            transform_kuip(&p, &out, KuipMode::ThemePalette)?;
+            transform_kuip(&p, &out, KuipMode::ThemePalette, false)?;
         } else if name == "hint.kuip" {
             fs::copy(&p, &out).map_err(|e| e.to_string())?;
         } else {
-            transform_kuip(&p, &out, KuipMode::Generic)?;
+            let inject_dlg = name == "prometheuscommon.kuip" || name == "ongmanicommon.kuip";
+            transform_kuip(&p, &out, KuipMode::Generic, inject_dlg)?;
         }
     }
 

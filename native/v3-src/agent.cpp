@@ -100,6 +100,7 @@ static void textOf(const QString& q,char* out,int capacity) {
 #include "theme.h"
 #include "display_options.h"
 #include "skin_switch.h"
+#include "canvas_eye.h"
 static void processRequest(Request* req) {
     req->guiThread=GetCurrentThreadId();bool ok=true;
     if(req->expireTick && GetTickCount64()>req->expireTick){
@@ -112,6 +113,7 @@ static void processRequest(Request* req) {
     else if(req->mode==12)ok=blue::load()&&display::apply(req);
     else if(req->mode==13)ok=blue::postRefresh();
     else if(req->mode==14)ok=skin_switch::apply(req);
+    else if(req->mode==15)ok=canvas_eye::apply(req);
     if(!req->status)req->status=ok?1:-6;
     InterlockedExchange(&requestBusy,0);InterlockedExchange(&req->done,1);
 }
@@ -130,7 +132,7 @@ static LRESULT CALLBACK oneMessageHook(int code,WPARAM parameter,LPARAM data) {
 
 extern "C" __declspec(dllexport) DWORD WINAPI RunFrameRequest(void* data) {
     Request* req=(Request*)data;
-    if(!req || req->magic!=0x57454633 || req->version!=4 || (req->mode!=0&&req->mode!=9&&req->mode!=10&&req->mode!=12&&req->mode!=13&&req->mode!=14) || req->count>20)return 10;
+    if(!req || req->magic!=0x57454633 || req->version!=4 || (req->mode!=0&&req->mode!=9&&req->mode!=10&&req->mode!=12&&req->mode!=13&&req->mode!=14&&req->mode!=15) || req->count>20)return 10;
     for(DWORD i=0;i<req->count;i++){
         if(!memchr(req->records[i].kind,0,16) || !memchr(req->records[i].style,0,96) || !memchr(req->records[i].name,0,96) || !memchr(req->records[i].value,0,512))return 11;
     }
